@@ -406,10 +406,9 @@ function App() {
             <div className="sub">Private payroll on Aztec</div>
           </div>
         </div>
-        <div className="pills">
-          <span className="pill jade">ZERO-KNOWLEDGE</span>
-          <span className="pill gold">PRIVATE</span>
-          <span className="pill rose">AZTEC TESTNET</span>
+        <div className="status">
+          <span className="pulse" />
+          Aztec testnet · live
         </div>
       </header>
 
@@ -417,10 +416,13 @@ function App() {
 
       {!connected && !connecting && !status && (
         <section className="hero">
+          <div className="orb orb-a" />
+          <div className="orb orb-b" />
+          <p className="eyebrow">ZERO-KNOWLEDGE PAYROLL · AZTEC</p>
           <h2>
-            Salaries that only
+            Payroll that only
             <br />
-            <em>you</em> and your team can see
+            <em>you</em> can ever see
           </h2>
           <p className="lead">
             Run payroll where no one — not even you, the employer — can see who
@@ -430,19 +432,19 @@ function App() {
           </p>
           <div className="features">
             <div className="feature">
-              <span className="dot jade" />
+              <span className="dot cyan" />
               Private salaries & funding
             </div>
             <div className="feature">
-              <span className="dot gold" />
+              <span className="dot magenta" />
               One-click pay everyone
             </div>
             <div className="feature">
-              <span className="dot rose" />
+              <span className="dot violet" />
               Prove fully paid, zero amounts leaked
             </div>
           </div>
-          <button className="btn" onClick={handleConnect} disabled={connecting}>
+          <button className="btn primary big" onClick={handleConnect} disabled={connecting}>
             Open SalAZy
           </button>
           <p className="hint">
@@ -450,6 +452,17 @@ function App() {
             employee — against the public Aztec testnet. A fresh identity each
             session; nothing is ever persisted.
           </p>
+          <div className="ticker">
+            <div className="ticker-track">
+              {Array.from({ length: 2 }).flatMap((_, k) =>
+                Array.from({ length: 6 }).map((__, i) => (
+                  <span key={`${k}-${i}`} className={i % 3 === 1 ? 'tick hot' : i % 3 === 2 ? 'tick cool' : 'tick'}>
+                    PRIVATE PAYROLL ✦ ZERO-KNOWLEDGE ✦ AZTEC TESTNET ✦
+                  </span>
+                )),
+              )}
+            </div>
+          </div>
         </section>
       )}
 
