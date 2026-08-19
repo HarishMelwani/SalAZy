@@ -444,16 +444,14 @@ function App() {
           <div className="orb orb-b" />
           <p className="eyebrow">PRIVATE PAYROLL · ZERO-KNOWLEDGE</p>
           <h2>
-            Who gets paid, how much, and when.
+            Who gets paid, what salary, and when.
             <br />
             <em>Private</em> to everyone else
           </h2>
           <p className="lead">
-            Total payroll privacy. Who's paid, how much, and when stays
-            private to everyone else. Salaries land encrypted to each
-            employee's keypair, your funding stays private too, and a
-            zero-knowledge proof quietly confirms everyone was paid, without
-            revealing a single number.
+            Payroll with total privacy. No one sees who you pay, what salary,
+            or when. Every salary is encrypted to the employee's keypair, and
+            a ZK proof confirms everyone got paid without revealing a number.
           </p>
           <div className="features">
             <div className="feature">
