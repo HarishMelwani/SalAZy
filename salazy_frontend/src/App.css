@@ -975,6 +975,54 @@ code {
   padding: 14px 24px;
 }
 
+.pay-note {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13px;
+  color: var(--rose);
+  background: rgba(255, 138, 122, 0.09);
+  border: 1px solid rgba(255, 138, 122, 0.4);
+  border-radius: 11px;
+  padding: 10px 13px;
+  line-height: 1.45;
+}
+
+.pay-note strong {
+  color: var(--cream);
+}
+
+.pay-fill {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.85;
+  white-space: nowrap;
+}
+
+.pay-note.ok {
+  color: var(--cyan);
+  background: rgba(25, 211, 255, 0.08);
+  border-color: rgba(25, 211, 255, 0.4);
+}
+
+.pay-note.pending {
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--line);
+}
+
+.pay-note-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  background: currentColor;
+  box-shadow: 0 0 10px currentColor;
+}
+
 .pc-list {
   display: flex;
   flex-direction: column;

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AztecAddress } from '@aztec/aztec.js/addresses';
 import type { EmbeddedWallet } from '@aztec/wallets/embedded';
 import type { SalAZyContract } from './generated/SalAZy';
@@ -285,6 +285,20 @@ function App() {
       )
     : 0n;
 
+  const activeEmployees = useMemo(
+    () => (selected ? selected.employees.filter((e) => e.address.trim()) : []),
+    [selected],
+  );
+  const currentPayroll =
+    payroll && selected && payroll.epoch === String(selected.epoch) ? payroll : null;
+  const payrollShortfall =
+    currentPayroll && salaryTotal > 0n && currentPayroll.funded < salaryTotal
+      ? salaryTotal - currentPayroll.funded
+      : null;
+  const fundedOk =
+    currentPayroll !== null && salaryTotal > 0n && currentPayroll.funded >= salaryTotal;
+  const canPay = activeEmployees.length > 0 && fundedOk;
+
   const handleFund = useCallback(async () => {
     if (!employer || !selected) return;
     const amount = parseAmount(fundAmount);
@@ -312,9 +326,16 @@ function App() {
 
   const handlePayEveryone = useCallback(async () => {
     if (!employer || !selected) return;
-    const rows = selected.employees.filter((e) => e.address.trim());
+    const rows = activeEmployees;
     if (rows.length === 0) {
       setError('Add at least one employee first');
+      return;
+    }
+    if (payrollShortfall !== null) {
+      setError(
+        `Fund ${formatAmount(payrollShortfall)} more first — ${formatAmount(currentPayroll?.funded ?? 0n)} funded of ${formatAmount(salaryTotal)} required`,
+      );
+      addLog(`Blocked: funding insufficient for epoch ${selected.epoch}`, true);
       return;
     }
     for (const e of rows) {
@@ -364,7 +385,17 @@ function App() {
     } finally {
       setBusy('');
     }
-  }, [employer, selected, businesses, saveBusiness, refreshPayroll]);
+  }, [
+    employer,
+    selected,
+    businesses,
+    saveBusiness,
+    refreshPayroll,
+    activeEmployees,
+    payrollShortfall,
+    currentPayroll,
+    salaryTotal,
+  ]);
 
   const handleProve = useCallback(async () => {
     if (!employer || !selected) return;
@@ -676,10 +707,50 @@ function App() {
                         <button
                           className="btn primary"
                           onClick={handlePayEveryone}
-                          disabled={busy === 'pay' || selected.employees.length === 0}
+                          disabled={busy === 'pay' || !canPay}
+                          title={
+                            payrollShortfall !== null
+                              ? `Fund ${formatAmount(payrollShortfall)} more to cover payroll`
+                              : !fundedOk
+                                ? 'Syncing on-chain funding…'
+                                : activeEmployees.length === 0
+                                  ? 'Add employees first'
+                                  : 'Pay everyone privately'
+                          }
                         >
-                          {busy === 'pay' ? 'Paying everyone…' : 'Pay everyone'}
+                          {busy === 'pay'
+                            ? 'Paying everyone…'
+                            : payrollShortfall !== null
+                              ? 'Fund required first'
+                              : 'Pay everyone'}
                         </button>
+                        {payrollShortfall !== null && (
+                          <div
+                            className="pay-note"
+                            onClick={() => setFundAmount(formatAmount(payrollShortfall))}
+                          >
+                            <span className="pay-note-dot" />
+                            {formatAmount(currentPayroll!.funded)} funded of{' '}
+                            {formatAmount(salaryTotal)} required — fund{' '}
+                            <strong>{formatAmount(payrollShortfall)}</strong> more to unlock
+                            payment <span className="pay-fill">click to fill ↦</span>
+                          </div>
+                        )}
+                        {payrollShortfall === null &&
+                          !fundedOk &&
+                          activeEmployees.length > 0 &&
+                          salaryTotal > 0n && (
+                            <div className="pay-note pending">
+                              <span className="pay-note-dot" />
+                              Checking on-chain funding…
+                            </div>
+                          )}
+                        {fundedOk && (
+                          <div className="pay-note ok">
+                            <span className="pay-note-dot" />
+                            Fully funded · ready to pay {formatAmount(salaryTotal)}
+                          </div>
+                        )}
                         <button
                           className="btn outline"
                           onClick={handleProve}
