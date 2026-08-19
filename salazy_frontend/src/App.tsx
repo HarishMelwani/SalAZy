@@ -418,27 +418,6 @@ function App() {
     }
   }, []);
 
-  const handleResetWallet = useCallback(async () => {
-    if (!window.confirm('Reset your wallet? This wipes your saved identity and business data from this browser.')) return;
-    localStorage.removeItem(STORAGE_KEY);
-    try {
-      await Promise.all(
-        ['salazy-wallet', 'salazy-pxe'].map(
-          (name) =>
-            new Promise<void>((resolve) => {
-              const req = indexedDB.deleteDatabase(name);
-              req.onsuccess = () => resolve();
-              req.onerror = () => resolve();
-              req.onblocked = () => resolve();
-            }),
-        ),
-      );
-    } catch {
-      // ignore — reload will still clear in-memory state
-    }
-    window.location.reload();
-  }, []);
-
   const connected = !!(employer && employee);
 
   return (
@@ -492,11 +471,6 @@ function App() {
           <button className="btn primary big" onClick={handleConnect} disabled={connecting}>
             Open SalAZy
           </button>
-          <p className="hint">
-            Opens a single persistent wallet saved in your browser
-            (IndexedDB) against the public Aztec testnet. Your identity and
-            business data survive refresh — nothing leaves your device.
-          </p>
           <div className="ticker">
             <div className="ticker-track">
               {Array.from({ length: 2 }).flatMap((_, k) =>
@@ -584,14 +558,7 @@ function App() {
                     <button className="icon-btn" onClick={() => copyText(employer!.address.toString(), 'Employer address')}>
                       Copy
                     </button>
-                    <button className="icon-btn danger" onClick={handleResetWallet}>
-                      Reset identity
-                    </button>
                   </div>
-                  <p className="muted hint">
-                    This wallet is saved in your browser — same address every
-                    visit. Reset to mint a fresh one (wipes local data).
-                  </p>
                 </div>
 
                 <details className="card log">
@@ -818,10 +785,6 @@ function App() {
                       Copy
                     </button>
                   </div>
-                  <p className="muted hint">
-                    This is your one wallet — employer and employee in one.
-                    Use it as your own employee address to pay yourself.
-                  </p>
                 </div>
 
                 <div className="card">
