@@ -442,30 +442,30 @@ function App() {
         <section className="hero">
           <div className="orb orb-a" />
           <div className="orb orb-b" />
-          <p className="eyebrow">ZERO-KNOWLEDGE PAYROLL · AZTEC</p>
+          <p className="eyebrow">PRIVATE PAYROLL · ZERO-KNOWLEDGE</p>
           <h2>
-            Payroll that only
+            Who gets paid, how much, and when —
             <br />
-            <em>you</em> can ever see
+            <em>invisible</em> to everyone else
           </h2>
           <p className="lead">
-            Run payroll where no one — not even you, the employer — can see who
-            was paid what. Every salary is a zero-knowledge proof encrypted to
-            the employee's keypair. Funding is private. A ZK proof attests that
-            every salary was paid without revealing a single amount.
+            No one can see who you pay, what you pay, or who gets paid. Your
+            salary lives in privacy mode — encrypted to your keypair alone.
+            Funding stays hidden too, and a zero-knowledge proof confirms every
+            salary was paid without ever revealing a single amount.
           </p>
           <div className="features">
             <div className="feature">
               <span className="dot cyan" />
-              Private salaries & funding
+              Nobody sees who paid what
             </div>
             <div className="feature">
               <span className="dot magenta" />
-              One-click pay everyone
+              Your salary stays in privacy mode
             </div>
             <div className="feature">
               <span className="dot violet" />
-              Prove fully paid, zero amounts leaked
+              Prove payroll ran — zero amounts leaked
             </div>
           </div>
           <button className="btn primary big" onClick={handleConnect} disabled={connecting}>
