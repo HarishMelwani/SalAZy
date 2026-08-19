@@ -1,0 +1,813 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { AztecAddress } from '@aztec/aztec.js/addresses';
+import type { EmbeddedWallet } from '@aztec/wallets/embedded';
+import type { SalAZyContract } from './generated/SalAZy';
+import { registerSponsoredFPC } from './fees';
+import { SALAZY_CONTRACT_ADDRESS } from './config';
+import { createWallet, createSessionAccount } from './wallet';
+import {
+  attachToSalAZy,
+  claimSalary,
+  encodeField,
+  fund,
+  isFullyPaid,
+  issueSalaries,
+  proveFullyPaid,
+  viewBalance,
+  viewFunding,
+  viewIssued,
+  viewPaychecks,
+  type SalaryNote,
+} from './salazy';
+import './App.css';
+
+const STORAGE_KEY = 'salazy.businesses.v1';
+
+type EmployeeRow = {
+  id: string;
+  name: string;
+  address: string;
+  salary: string;
+  role: string;
+};
+
+type Business = {
+  id: string;
+  name: string;
+  epoch: number;
+  employees: EmployeeRow[];
+};
+
+type Payroll = {
+  epoch: string;
+  funded: bigint;
+  issued: bigint;
+  fullyPaid: boolean;
+};
+
+type LogLine = { time: string; text: string; err?: boolean };
+
+function shortAddress(addr: string, n = 10) {
+  return addr.length > n * 2 ? `${addr.slice(0, n)}…${addr.slice(-n)}` : addr;
+}
+
+function parseAmount(s: string): bigint | null {
+  const m = /^(\d+)(?:\.(\d{1,2}))?$/.exec(s.trim());
+  if (!m) return null;
+  const frac = (m[2] ?? '').padEnd(2, '0');
+  return BigInt(m[1]) * 100n + BigInt(frac || '0');
+}
+
+function formatAmount(n: bigint): string {
+  const s = n.toString().padStart(3, '0');
+  return `${s.slice(0, -2)}.${s.slice(-2)}`;
+}
+
+function loadBusinesses(): Business[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as Business[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function App() {
+  const [employer, setEmployer] = useState<{
+    address: AztecAddress;
+    contract: SalAZyContract;
+  } | null>(null);
+  const [employee, setEmployee] = useState<{
+    address: AztecAddress;
+    contract: SalAZyContract;
+  } | null>(null);
+  const [walletRef] = useState<{ employer: EmbeddedWallet | null; employee: EmbeddedWallet | null }>({
+    employer: null,
+    employee: null,
+  });
+  const [connecting, setConnecting] = useState(false);
+  const [status, setStatus] = useState('');
+  const [error, setError] = useState('');
+  const [tab, setTab] = useState<'employer' | 'employee'>('employer');
+
+  const [businesses, setBusinesses] = useState<Business[]>(loadBusinesses);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [newBusinessName, setNewBusinessName] = useState('');
+  const [employeeForm, setEmployeeForm] = useState({
+    name: '',
+    address: '',
+    salary: '',
+    role: '',
+  });
+  const [fundAmount, setFundAmount] = useState('');
+  const [payroll, setPayroll] = useState<Payroll | null>(null);
+  const [paychecks, setPaychecks] = useState<SalaryNote[]>([]);
+  const [balance, setBalance] = useState<bigint>(0n);
+  const [busy, setBusy] = useState<string>('');
+  const [log, setLog] = useState<LogLine[]>([]);
+  const logRef = useRef<HTMLDivElement>(null);
+  const lastPaycheckCount = useRef<number | null>(null);
+
+  function addLog(text: string, err = false) {
+    setLog((l) => [
+      ...l.slice(-99),
+      { time: new Date().toLocaleTimeString(), text, err },
+    ]);
+  }
+
+  useEffect(() => {
+    logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
+  }, [log]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(businesses));
+  }, [businesses]);
+
+  const selected = businesses.find((b) => b.id === selectedId) ?? null;
+
+  const saveBusiness = useCallback((next: Business[]) => {
+    setBusinesses(next);
+  }, []);
+
+  const handleConnect = useCallback(async () => {
+    setConnecting(true);
+    setError('');
+    try {
+      setStatus('Opening employer wallet…');
+      const empW = await createWallet({ proverEnabled: true, onProgress: setStatus });
+      walletRef.employer = empW;
+      const empAccount = await createSessionAccount(empW);
+      setStatus('Registering fee contracts…');
+      await registerSponsoredFPC(empW);
+      const empContract = await attachToSalAZy(empW);
+      setEmployer({ address: empAccount.address, contract: empContract });
+      addLog(`Employer wallet ready ${shortAddress(empAccount.address.toString())}`);
+
+      setStatus('Opening employee wallet…');
+      const emp2 = await createWallet({ proverEnabled: true, onProgress: setStatus });
+      walletRef.employee = emp2;
+      const empAccount2 = await createSessionAccount(emp2);
+      await registerSponsoredFPC(emp2);
+      const empContract2 = await attachToSalAZy(emp2);
+      setEmployee({ address: empAccount2.address, contract: empContract2 });
+      addLog(`Employee wallet ready ${shortAddress(empAccount2.address.toString())}`);
+      setStatus('Ready');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(`Setup failed: ${msg}`);
+      addLog(`Error: ${msg}`, true);
+    } finally {
+      setConnecting(false);
+      setStatus('');
+    }
+  }, [walletRef]);
+
+  const refreshPayroll = useCallback(
+    async (b: Business) => {
+      if (!employer) return;
+      const company = encodeField(b.name);
+      try {
+        const funded = await viewFunding(employer.contract, employer.address, company, BigInt(b.epoch));
+        const issued = await viewIssued(employer.contract, employer.address, company, BigInt(b.epoch));
+        const fullyPaid = await isFullyPaid(employer.contract, employer.address, company, BigInt(b.epoch));
+        setPayroll({ epoch: String(b.epoch), funded, issued, fullyPaid });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        addLog(`Payroll view error: ${msg}`, true);
+      }
+    },
+    [employer],
+  );
+
+  const refreshEmployee = useCallback(async () => {
+    if (!employee) return;
+    try {
+      const [pc, bal] = await Promise.all([
+        viewPaychecks(employee.contract, employee.address),
+        viewBalance(employee.contract, employee.address),
+      ]);
+      setPaychecks(pc);
+      setBalance(bal);
+      if (pc.length !== lastPaycheckCount.current) {
+        addLog(`Paychecks refreshed · ${pc.length} incoming`);
+        lastPaycheckCount.current = pc.length;
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      addLog(`Employee view error: ${msg}`, true);
+    }
+  }, [employee]);
+
+  useEffect(() => {
+    if (!employer || !selected) return;
+    refreshPayroll(selected);
+  }, [employer, selected, refreshPayroll]);
+
+  useEffect(() => {
+    if (!employee) return;
+    refreshEmployee();
+    const id = setInterval(refreshEmployee, 10000);
+    return () => clearInterval(id);
+  }, [employee, refreshEmployee]);
+
+  const createBusiness = useCallback(() => {
+    const name = newBusinessName.trim();
+    if (!name) return;
+    const id = crypto.randomUUID();
+    const next = [...businesses, { id, name, epoch: 1, employees: [] }];
+    saveBusiness(next);
+    setSelectedId(id);
+    setNewBusinessName('');
+    addLog(`Created business "${name}"`);
+  }, [businesses, newBusinessName, saveBusiness]);
+
+  const addEmployee = useCallback(() => {
+    if (!selected) return;
+    const name = employeeForm.name.trim();
+    const address = employeeForm.address.trim();
+    if (!name || !address) {
+      setError('Name and wallet address are required');
+      return;
+    }
+    if (parseAmount(employeeForm.salary) === null && employeeForm.salary.trim() !== '') {
+      setError('Salary must be a number like 1200.00');
+      return;
+    }
+    const next = businesses.map((b) =>
+      b.id === selected.id
+        ? {
+            ...b,
+            employees: [
+              ...b.employees,
+              {
+                id: crypto.randomUUID(),
+                name,
+                address,
+                salary: employeeForm.salary.trim() || '0',
+                role: employeeForm.role.trim(),
+              },
+            ],
+          }
+        : b,
+    );
+    saveBusiness(next);
+    setEmployeeForm({ name: '', address: '', salary: '', role: '' });
+    addLog(`Added employee ${name}`);
+  }, [businesses, selected, employeeForm, saveBusiness]);
+
+  const removeEmployee = useCallback(
+    (empId: string) => {
+      if (!selected) return;
+      saveBusiness(
+        businesses.map((b) =>
+          b.id === selected.id
+            ? { ...b, employees: b.employees.filter((e) => e.id !== empId) }
+            : b,
+        ),
+      );
+    },
+    [businesses, selected, saveBusiness],
+  );
+
+  const salaryTotal = selected
+    ? selected.employees.reduce(
+        (sum, e) => sum + (parseAmount(e.salary) ?? 0n),
+        0n,
+      )
+    : 0n;
+
+  const handleFund = useCallback(async () => {
+    if (!employer || !selected) return;
+    const amount = parseAmount(fundAmount);
+    if (amount === null || amount <= 0n) {
+      setError('Enter a valid funding amount');
+      return;
+    }
+    setBusy('fund');
+    setError('');
+    try {
+      const company = encodeField(selected.name);
+      addLog(`Proving & funding epoch ${selected.epoch}…`);
+      await fund(employer.contract, employer.address, company, BigInt(selected.epoch), amount);
+      addLog(`Funded ${formatAmount(amount)} for epoch ${selected.epoch}`);
+      setFundAmount('');
+      setTimeout(() => refreshPayroll(selected), 4000);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(`Fund failed: ${msg}`);
+      addLog(`Fund error: ${msg}`, true);
+    } finally {
+      setBusy('');
+    }
+  }, [employer, selected, fundAmount, refreshPayroll]);
+
+  const handlePayEveryone = useCallback(async () => {
+    if (!employer || !selected) return;
+    const rows = selected.employees.filter((e) => e.address.trim());
+    if (rows.length === 0) {
+      setError('Add at least one employee first');
+      return;
+    }
+    for (const e of rows) {
+      if (parseAmount(e.salary) === null) {
+        setError(`Invalid salary for ${e.name}`);
+        return;
+      }
+      try {
+        AztecAddress.fromStringUnsafe(e.address.trim());
+      } catch {
+        setError(`Invalid wallet address for ${e.name}`);
+        return;
+      }
+    }
+    setBusy('pay');
+    setError('');
+    try {
+      const company = encodeField(selected.name);
+      const employees = rows.map((e) => ({
+        address: AztecAddress.fromStringUnsafe(e.address.trim()),
+        amount: parseAmount(e.salary)!,
+        role: encodeField(e.role),
+      }));
+      addLog(`Proving batch pay for ${rows.length} employee${rows.length === 1 ? '' : 's'}…`);
+      await issueSalaries(
+        employer.contract,
+        employer.address,
+        company,
+        BigInt(selected.epoch),
+        employees,
+      );
+      addLog(`Paid ${rows.length} employee${rows.length === 1 ? '' : 's'} privately (epoch ${selected.epoch})`);
+      const next = businesses.map((b) =>
+        b.id === selected.id ? { ...b, epoch: b.epoch + 1 } : b,
+      );
+      saveBusiness(next);
+      setPayroll(null);
+      setTimeout(() => refreshPayroll({ ...selected, epoch: selected.epoch + 1 }), 4000);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(`Payroll failed: ${msg}`);
+      addLog(`Payroll error: ${msg}`, true);
+    } finally {
+      setBusy('');
+    }
+  }, [employer, selected, businesses, saveBusiness, refreshPayroll]);
+
+  const handleProve = useCallback(async () => {
+    if (!employer || !selected) return;
+    setBusy('prove');
+    setError('');
+    try {
+      const company = encodeField(selected.name);
+      addLog(`Building ZK proof issued == funded…`);
+      await proveFullyPaid(employer.contract, employer.address, company, BigInt(selected.epoch));
+      addLog(`✓ PROVED fully paid for epoch ${selected.epoch} — zero amounts revealed`);
+      setTimeout(() => refreshPayroll(selected), 4000);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(`Proof failed: ${msg}`);
+      addLog(`Proof error: ${msg}`, true);
+    } finally {
+      setBusy('');
+    }
+  }, [employer, selected, refreshPayroll]);
+
+  const handleClaim = useCallback(
+    async (epoch: string) => {
+      if (!employee) return;
+      setBusy(`claim-${epoch}`);
+      setError('');
+      try {
+        addLog(`Proving claim of epoch ${epoch} paychecks…`);
+        await claimSalary(employee.contract, employee.address, BigInt(epoch));
+        addLog(`Claimed epoch ${epoch} into private balance`);
+        setTimeout(refreshEmployee, 4000);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setError(`Claim failed: ${msg}`);
+        addLog(`Claim error: ${msg}`, true);
+      } finally {
+        setBusy('');
+      }
+    },
+    [employee, refreshEmployee],
+  );
+
+  const copyText = useCallback(async (text: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      addLog(`${label} copied to clipboard`);
+    } catch {
+      addLog('Clipboard unavailable', true);
+    }
+  }, []);
+
+  const connected = !!(employer && employee);
+
+  return (
+    <div className="app">
+      <header className="topbar">
+        <div className="brand">
+          <div className="logo">S</div>
+          <div>
+            <h1>SalAZy</h1>
+            <div className="sub">Private payroll on Aztec</div>
+          </div>
+        </div>
+        <div className="pills">
+          <span className="pill chartreuse">ZERO-KNOWLEDGE</span>
+          <span className="pill orchid">PRIVATE</span>
+          <span className="pill aqua">AZTEC TESTNET</span>
+        </div>
+      </header>
+
+      {error && <div className="error">{error}</div>}
+
+      {!connected && !connecting && !status && (
+        <section className="hero">
+          <h2>
+            Salaries that only
+            <br />
+            <em>you</em> and your team can see
+          </h2>
+          <p className="lead">
+            Run payroll where no one — not even you, the employer — can see who
+            was paid what. Every salary is a zero-knowledge proof encrypted to
+            the employee's keypair. Funding is private. A ZK proof attests that
+            every salary was paid without revealing a single amount.
+          </p>
+          <div className="features">
+            <div className="feature">
+              <span className="dot chartreuse" />
+              Private salaries & funding
+            </div>
+            <div className="feature">
+              <span className="dot orchid" />
+              One-click pay everyone
+            </div>
+            <div className="feature">
+              <span className="dot aqua" />
+              Prove fully paid, zero amounts leaked
+            </div>
+          </div>
+          <button className="btn" onClick={handleConnect} disabled={connecting}>
+            Open SalAZy
+          </button>
+          <p className="hint">
+            Opens two ephemeral wallets in your browser — one employer, one
+            employee — against the public Aztec testnet. A fresh identity each
+            session; nothing is ever persisted.
+          </p>
+        </section>
+      )}
+
+      {(connecting || status) && !connected && (
+        <div className="progress">
+          <div className="spinner" />
+          <p>{status}</p>
+        </div>
+      )}
+
+      {connected && (
+        <main className="layout">
+          <nav className="tabs">
+            <button
+              className={tab === 'employer' ? 'tab active' : 'tab'}
+              onClick={() => setTab('employer')}
+            >
+              Employer
+            </button>
+            <button
+              className={tab === 'employee' ? 'tab active' : 'tab'}
+              onClick={() => setTab('employee')}
+            >
+              Employee
+            </button>
+          </nav>
+
+          {tab === 'employer' && (
+            <div className="dashboard">
+              <div className="side-col">
+                <div className="card">
+                  <div className="card-title">Your businesses</div>
+                  {businesses.length === 0 && (
+                    <p className="muted">No businesses yet. Create your first one.</p>
+                  )}
+                  <div className="business-list">
+                    {businesses.map((b) => (
+                      <button
+                        key={b.id}
+                        className={`business-row${b.id === selectedId ? ' active' : ''}`}
+                        onClick={() => setSelectedId(b.id)}
+                      >
+                        <span className="bname">{b.name}</span>
+                        <span className="bcount">{b.employees.length} emp</span>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="row">
+                    <input
+                      value={newBusinessName}
+                      onChange={(e) => setNewBusinessName(e.target.value)}
+                      placeholder="Add business name"
+                      onKeyDown={(e) => e.key === 'Enter' && createBusiness()}
+                    />
+                    <button className="btn small" onClick={createBusiness} disabled={!newBusinessName.trim()}>
+                      Add
+                    </button>
+                  </div>
+                </div>
+
+                <div className="card identity">
+                  <div className="me">
+                    <div className="avatar">
+                      {employer!.address.toString().slice(2, 4).toUpperCase()}
+                    </div>
+                    <div className="who">
+                      <div className="label">Employer address</div>
+                      <code title={employer!.address.toString()}>
+                        {shortAddress(employer!.address.toString(), 16)}
+                      </code>
+                    </div>
+                  </div>
+                  <div className="actions">
+                    <button className="icon-btn" onClick={() => copyText(employer!.address.toString(), 'Employer address')}>
+                      Copy
+                    </button>
+                  </div>
+                </div>
+
+                <details className="card log">
+                  <summary>Session activity</summary>
+                  <div className="log-inner" ref={logRef}>
+                    {log.map((l, i) => (
+                      <div className={`log-line${l.err ? ' err' : ''}`} key={i}>
+                        <span className="time">{l.time}</span>
+                        {l.text}
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              </div>
+
+              <div className="main-col">
+                {!selected ? (
+                  <div className="empty">
+                    <div className="glyph">🪙</div>
+                    <p>Select a business or create one</p>
+                    <div className="sub">
+                      Each business keeps its own employee list and payroll.
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="card head">
+                      <div>
+                        <div className="card-title">{selected.name}</div>
+                        <div className="muted">
+                          Period (epoch) #{selected.epoch} · {selected.employees.length} employee
+                          {selected.employees.length === 1 ? '' : 's'} · payroll{' '}
+                          {formatAmount(salaryTotal)}
+                        </div>
+                      </div>
+                      {payroll && (
+                        <div className="payroll-chips">
+                          <div className="chip">
+                            <span className="chip-lbl">Funded</span>
+                            <span className="chip-val">{formatAmount(payroll.funded)}</span>
+                          </div>
+                          <div className="chip">
+                            <span className="chip-lbl">Issued</span>
+                            <span className="chip-val">{formatAmount(payroll.issued)}</span>
+                          </div>
+                          {payroll.funded === 0n && payroll.issued === 0n ? (
+                            <div className="chip muted-chip">Not started</div>
+                          ) : payroll.fullyPaid ? (
+                            <div className="chip ok-chip">Fully funded ✓</div>
+                          ) : (
+                            <div className="chip warn-chip">Partial</div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="card">
+                      <div className="card-title">Employees</div>
+                      {selected.employees.length === 0 && (
+                        <p className="muted">
+                          Add your first employee. Use the address shown in the
+                          Employee tab as a wallet address to pay yourself.
+                        </p>
+                      )}
+                      <div className="emp-table">
+                        <div className="emp-head">
+                          <span>Name</span>
+                          <span>Wallet</span>
+                          <span>Salary</span>
+                          <span>Role</span>
+                          <span />
+                        </div>
+                        {selected.employees.map((e) => (
+                          <div className="emp-row" key={e.id}>
+                            <span className="emp-name">{e.name}</span>
+                            <code className="emp-addr">{shortAddress(e.address, 8)}</code>
+                            <span>{e.salary || '—'}</span>
+                            <span>{e.role || '—'}</span>
+                            <button className="icon-btn danger" onClick={() => removeEmployee(e.id)}>
+                              ✕
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="emp-form">
+                        <input
+                          value={employeeForm.name}
+                          onChange={(e) => setEmployeeForm({ ...employeeForm, name: e.target.value })}
+                          placeholder="Name"
+                        />
+                        <input
+                          value={employeeForm.address}
+                          onChange={(e) => setEmployeeForm({ ...employeeForm, address: e.target.value })}
+                          placeholder="Wallet (Aztec address)"
+                          spellCheck={false}
+                        />
+                        <input
+                          value={employeeForm.salary}
+                          onChange={(e) => setEmployeeForm({ ...employeeForm, salary: e.target.value })}
+                          placeholder="Salary (1200.00)"
+                        />
+                        <input
+                          value={employeeForm.role}
+                          onChange={(e) => setEmployeeForm({ ...employeeForm, role: e.target.value })}
+                          placeholder="Role (optional)"
+                        />
+                        <button className="btn small" onClick={addEmployee}>
+                          Add employee
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="card">
+                      <div className="card-title">Payroll · epoch {selected.epoch}</div>
+                      <p className="muted">
+                        Fund the period, then pay everyone with one click. Each
+                        salary is a private encrypted note — amounts stay hidden.
+                      </p>
+                      <div className="payroll-actions">
+                        <div className="row grow">
+                          <input
+                            value={fundAmount}
+                            onChange={(e) => setFundAmount(e.target.value)}
+                            placeholder={`Fund amount (suggested ${formatAmount(salaryTotal)})`}
+                          />
+                          <button
+                            className="btn"
+                            onClick={handleFund}
+                            disabled={busy === 'fund' || !fundAmount.trim()}
+                          >
+                            {busy === 'fund' ? 'Funding…' : 'Fund'}
+                          </button>
+                        </div>
+                        <button
+                          className="btn primary"
+                          onClick={handlePayEveryone}
+                          disabled={busy === 'pay' || selected.employees.length === 0}
+                        >
+                          {busy === 'pay' ? 'Paying everyone…' : 'Pay everyone'}
+                        </button>
+                        <button
+                          className="btn outline"
+                          onClick={handleProve}
+                          disabled={busy === 'prove'}
+                        >
+                          {busy === 'prove' ? 'Proving…' : 'Prove fully paid'}
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
+          {tab === 'employee' && (
+            <div className="dashboard">
+              <div className="side-col">
+                <div className="card identity">
+                  <div className="me">
+                    <div className="avatar">
+                      {employee!.address.toString().slice(2, 4).toUpperCase()}
+                    </div>
+                    <div className="who">
+                      <div className="label">Your wallet</div>
+                      <code title={employee!.address.toString()}>
+                        {shortAddress(employee!.address.toString(), 16)}
+                      </code>
+                    </div>
+                  </div>
+                  <div className="actions">
+                    <button
+                      className="icon-btn"
+                      onClick={() => copyText(employee!.address.toString(), 'Wallet address')}
+                    >
+                      Copy
+                    </button>
+                  </div>
+                  <p className="muted hint">
+                    Share this address with an employer to receive a private paycheck.
+                  </p>
+                </div>
+
+                <div className="card">
+                  <div className="stats">
+                    <div className="stat">
+                      <div className="num green">{paychecks.length}</div>
+                      <div className="lbl">Incoming</div>
+                    </div>
+                    <div className="stat">
+                      <div className="num teal">{formatAmount(balance)}</div>
+                      <div className="lbl">Balance</div>
+                    </div>
+                    <div className="stat">
+                      <div className="num pink">{log.length}</div>
+                      <div className="lbl">Actions</div>
+                    </div>
+                    <div className="stat">
+                      <div className="num">24/7</div>
+                      <div className="lbl">On-chain</div>
+                    </div>
+                  </div>
+                </div>
+
+                <details className="card log">
+                  <summary>Session activity</summary>
+                  <div className="log-inner" ref={logRef}>
+                    {log.map((l, i) => (
+                      <div className={`log-line${l.err ? ' err' : ''}`} key={i}>
+                        <span className="time">{l.time}</span>
+                        {l.text}
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              </div>
+
+              <div className="main-col">
+                <div className="card">
+                  <div className="card-title">Incoming paychecks</div>
+                  {paychecks.length === 0 ? (
+                    <div className="empty">
+                      <div className="glyph">🔒</div>
+                      <p>No paychecks yet</p>
+                      <div className="sub">
+                        Once an employer issues your salary, it appears here —
+                        encrypted to your keypair only.
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="pc-list">
+                      {paychecks.map((p, i) => (
+                        <div className="pc-row" key={i}>
+                          <div>
+                            <div className="pc-company">{p.company || '—'}</div>
+                            <div className="pc-meta">
+                              epoch {p.epoch} · {p.role || 'no role'}
+                            </div>
+                          </div>
+                          <div className="pc-side">
+                            <span className="pc-amount">{formatAmount(p.amount)}</span>
+                            <button className="btn small" onClick={() => handleClaim(p.epoch)}>
+                              Claim
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="card">
+                  <div className="card-title">Claimed balance</div>
+                  <div className="balance-big">{formatAmount(balance)}</div>
+                  <p className="muted">
+                    Claimed salaries live in your private balance ledger. Only
+                    you can ever see them.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+        </main>
+      )}
+
+      <footer className="footer">
+        <div>
+          Contract <code>{shortAddress(SALAZY_CONTRACT_ADDRESS, 14)}</code>
+        </div>
+        <div>Aztec testnet · embedded wallets · no servers</div>
+      </footer>
+    </div>
+  );
+}
+
+export default App;

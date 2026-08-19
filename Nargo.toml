@@ -1,0 +1,2 @@
+[workspace]
+members = ["salazy_contract", "salazy_test"]
