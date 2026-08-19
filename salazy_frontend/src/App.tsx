@@ -444,9 +444,9 @@ function App() {
           <div className="orb orb-b" />
           <p className="eyebrow">PRIVATE PAYROLL · ZERO-KNOWLEDGE</p>
           <h2>
-            Who gets paid. What salary. When.
+            Your payroll is nobody's business.
             <br />
-            <em>Private</em> to everyone else
+            <em>Private</em> to everyone else.
           </h2>
           <p className="lead">
             Payroll with total privacy. No one sees who you pay, what salary,
