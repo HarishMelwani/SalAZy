@@ -142,24 +142,17 @@ function App() {
     setConnecting(true);
     setError('');
     try {
-      setStatus('Opening employer wallet…');
-      const empW = await createWallet({ proverEnabled: true, onProgress: setStatus });
-      walletRef.employer = empW;
-      const empAccount = await createSessionAccount(empW);
+      setStatus('Opening your wallet…');
+      const wallet = await createWallet({ proverEnabled: true, onProgress: setStatus });
+      walletRef.employer = wallet;
+      walletRef.employee = wallet;
+      const account = await createSessionAccount(wallet);
       setStatus('Registering fee contracts…');
-      await registerSponsoredFPC(empW);
-      const empContract = await attachToSalAZy(empW);
-      setEmployer({ address: empAccount.address, contract: empContract });
-      addLog(`Employer wallet ready ${shortAddress(empAccount.address.toString())}`);
-
-      setStatus('Opening employee wallet…');
-      const emp2 = await createWallet({ proverEnabled: true, onProgress: setStatus });
-      walletRef.employee = emp2;
-      const empAccount2 = await createSessionAccount(emp2);
-      await registerSponsoredFPC(emp2);
-      const empContract2 = await attachToSalAZy(emp2);
-      setEmployee({ address: empAccount2.address, contract: empContract2 });
-      addLog(`Employee wallet ready ${shortAddress(empAccount2.address.toString())}`);
+      await registerSponsoredFPC(wallet);
+      const contract = await attachToSalAZy(wallet);
+      setEmployer({ address: account.address, contract });
+      setEmployee({ address: account.address, contract });
+      addLog(`Wallet ready ${shortAddress(account.address.toString())}`);
       setStatus('Ready');
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -479,9 +472,9 @@ function App() {
             Open SalAZy
           </button>
           <p className="hint">
-            Opens two ephemeral wallets in your browser — one employer, one
-            employee — against the public Aztec testnet. A fresh identity each
-            session; nothing is ever persisted.
+            Opens a single ephemeral wallet in your browser against the public Aztec
+            testnet. A fresh identity each session; nothing is ever persisted.
+            Add your own address as an employee to pay yourself.
           </p>
           <div className="ticker">
             <div className="ticker-track">
@@ -619,9 +612,17 @@ function App() {
                           {payroll.funded === 0n && payroll.issued === 0n ? (
                             <div className="chip muted-chip">Not started</div>
                           ) : payroll.fullyPaid ? (
-                            <div className="chip ok-chip">Fully funded ✓</div>
+                            <div className="chip ok-chip">Fully paid ✓</div>
                           ) : (
                             <div className="chip warn-chip">Partial</div>
+                          )}
+                          {payroll.funded > payroll.issued && (
+                            <div className="chip remain-chip">
+                              <span className="chip-lbl">Remaining</span>
+                              <span className="chip-val">
+                                {formatAmount(payroll.funded - payroll.issued)}
+                              </span>
+                            </div>
                           )}
                         </div>
                       )}
@@ -790,7 +791,8 @@ function App() {
                     </button>
                   </div>
                   <p className="muted hint">
-                    Share this address with an employer to receive a private paycheck.
+                    This is your one wallet — employer and employee in one.
+                    Use it as your own employee address to pay yourself.
                   </p>
                 </div>
 
@@ -836,7 +838,7 @@ function App() {
                       <div className="glyph">🔒</div>
                       <p>No paychecks yet</p>
                       <div className="sub">
-                        Once an employer issues your salary, it appears here —
+                        Once you pay a salary to your own address, it appears here —
                         encrypted to your keypair only.
                       </div>
                     </div>
