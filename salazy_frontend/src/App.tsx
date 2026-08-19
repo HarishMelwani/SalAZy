@@ -444,7 +444,7 @@ function App() {
           <div className="orb orb-b" />
           <p className="eyebrow">PRIVATE PAYROLL · ZERO-KNOWLEDGE</p>
           <h2>
-            Who gets paid, what salary, and when.
+            Who gets paid. What salary. When.
             <br />
             <em>Private</em> to everyone else
           </h2>
