@@ -444,15 +444,15 @@ function App() {
           <div className="orb orb-b" />
           <p className="eyebrow">PRIVATE PAYROLL · ZERO-KNOWLEDGE</p>
           <h2>
-            Who gets paid, how much, and when —
+            Who gets paid, how much, and when.
             <br />
-            <em>invisible</em> to everyone else
+            <em>Private</em> to everyone else
           </h2>
           <p className="lead">
             Total payroll privacy. Who's paid, how much, and when stays
-            invisible to everyone else. Salaries land encrypted to each
-            employee's keypair, your funding never leaves the shadows, and a
-            zero-knowledge proof quietly confirms everyone was paid — without
+            private to everyone else. Salaries land encrypted to each
+            employee's keypair, your funding stays private too, and a
+            zero-knowledge proof quietly confirms everyone was paid, without
             revealing a single number.
           </p>
           <div className="features">
@@ -466,7 +466,7 @@ function App() {
             </div>
             <div className="feature">
               <span className="dot violet" />
-              Prove payroll ran — zero amounts leaked
+              Prove payroll ran, zero amounts leaked
             </div>
           </div>
           <button className="btn primary big" onClick={handleConnect} disabled={connecting}>
@@ -673,7 +673,7 @@ function App() {
                       <div className="card-title">Payroll · epoch {selected.epoch}</div>
                       <p className="muted">
                         Fund the period, then pay everyone with one click. Each
-                        salary is a private encrypted note — amounts stay hidden.
+                        salary is a private encrypted note; amounts stay hidden.
                       </p>
                       <div className="payroll-actions">
                         <div className="row grow">
@@ -717,7 +717,7 @@ function App() {
                           >
                             <span className="pay-note-dot" />
                             {formatAmount(currentPayroll!.funded)} funded of{' '}
-                            {formatAmount(salaryTotal)} required — fund{' '}
+                            {formatAmount(salaryTotal)} required. Fund{' '}
                             <strong>{formatAmount(payrollShortfall)}</strong> more to unlock
                             payment <span className="pay-fill">click to fill ↦</span>
                           </div>
@@ -819,7 +819,7 @@ function App() {
                       <div className="glyph">🔒</div>
                       <p>No paychecks yet</p>
                       <div className="sub">
-                        Once you pay a salary to your own address, it appears here —
+                        Once you pay a salary to your own address, it appears here,
                         encrypted to your keypair only.
                       </div>
                     </div>
@@ -847,7 +847,7 @@ function App() {
                   <div className="card-title">Balance</div>
                   <div className="balance-big">{formatAmount(balance)}</div>
                   <p className="muted">
-                    Salaries land here the moment payroll runs — nothing to
+                    Salaries land here the moment payroll runs; nothing to
                     claim. Only you can ever see them.
                   </p>
                 </div>
