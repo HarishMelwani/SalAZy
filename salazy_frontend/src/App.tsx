@@ -449,10 +449,11 @@ function App() {
             <em>invisible</em> to everyone else
           </h2>
           <p className="lead">
-            No one can see who you pay, what you pay, or who gets paid. Your
-            salary lives in privacy mode — encrypted to your keypair alone.
-            Funding stays hidden too, and a zero-knowledge proof confirms every
-            salary was paid without ever revealing a single amount.
+            Total payroll privacy. Who's paid, how much, and when stays
+            invisible to everyone else. Salaries land encrypted to each
+            employee's keypair, your funding never leaves the shadows, and a
+            zero-knowledge proof quietly confirms everyone was paid — without
+            revealing a single number.
           </p>
           <div className="features">
             <div className="feature">
