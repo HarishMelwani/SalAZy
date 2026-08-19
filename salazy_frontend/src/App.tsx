@@ -106,6 +106,8 @@ function App() {
   const [balance, setBalance] = useState<bigint>(0n);
   const [busy, setBusy] = useState<string>('');
   const [log, setLog] = useState<LogLine[]>([]);
+  const [toast, setToast] = useState<string>('');
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const lastPaycheckCount = useRef<number | null>(null);
 
@@ -114,6 +116,12 @@ function App() {
       ...l.slice(-99),
       { time: new Date().toLocaleTimeString(), text, err },
     ]);
+  }
+
+  function showToast(text: string) {
+    setToast(text);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(''), 3500);
   }
 
   useEffect(() => {
@@ -342,6 +350,7 @@ function App() {
         await issueSalaries(employer.contract, employer.address, company, BigInt(selected.epoch), batch);
       }
       addLog(`Paid ${rows.length} employee${rows.length === 1 ? '' : 's'} privately (epoch ${selected.epoch})`);
+      showToast(`Paid ${rows.length} employee${rows.length === 1 ? '' : 's'} ✓`);
       const next = businesses.map((b) =>
         b.id === selected.id ? { ...b, epoch: b.epoch + 1 } : b,
       );
@@ -398,9 +407,9 @@ function App() {
           </div>
         </div>
         <div className="pills">
-          <span className="pill chartreuse">ZERO-KNOWLEDGE</span>
-          <span className="pill orchid">PRIVATE</span>
-          <span className="pill aqua">AZTEC TESTNET</span>
+          <span className="pill jade">ZERO-KNOWLEDGE</span>
+          <span className="pill gold">PRIVATE</span>
+          <span className="pill rose">AZTEC TESTNET</span>
         </div>
       </header>
 
@@ -421,15 +430,15 @@ function App() {
           </p>
           <div className="features">
             <div className="feature">
-              <span className="dot chartreuse" />
+              <span className="dot jade" />
               Private salaries & funding
             </div>
             <div className="feature">
-              <span className="dot orchid" />
+              <span className="dot gold" />
               One-click pay everyone
             </div>
             <div className="feature">
-              <span className="dot aqua" />
+              <span className="dot rose" />
               Prove fully paid, zero amounts leaked
             </div>
           </div>
@@ -704,15 +713,15 @@ function App() {
                 <div className="card">
                   <div className="stats">
                     <div className="stat">
-                      <div className="num green">{paychecks.length}</div>
+                      <div className="num jade">{paychecks.length}</div>
                       <div className="lbl">Incoming</div>
                     </div>
                     <div className="stat">
-                      <div className="num teal">{formatAmount(balance)}</div>
+                      <div className="num gold">{formatAmount(balance)}</div>
                       <div className="lbl">Balance</div>
                     </div>
                     <div className="stat">
-                      <div className="num pink">{log.length}</div>
+                      <div className="num rose">{log.length}</div>
                       <div className="lbl">Actions</div>
                     </div>
                     <div className="stat">
@@ -787,6 +796,8 @@ function App() {
         </div>
         <div>Aztec testnet · embedded wallets · no servers</div>
       </footer>
+
+      {toast && <div className="toast-pop">{toast}</div>}
     </div>
   );
 }
