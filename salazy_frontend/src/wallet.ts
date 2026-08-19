@@ -9,8 +9,8 @@ import { STANDARD_HANDSHAKE_REGISTRY_ADDRESS } from '@aztec/standard-contracts/h
 import { STANDARD_AUTH_REGISTRY_ADDRESS } from '@aztec/standard-contracts/auth-registry/constants';
 import { getNodeUrl } from './config';
 
-const WALLET_STORE_NAME = 'privazy-wallet';
-const PXE_STORE_NAME = 'privazy-pxe';
+const WALLET_STORE_NAME = 'salazy-wallet';
+const PXE_STORE_NAME = 'salazy-pxe';
 
 export type ProgressFn = (text: string) => void;
 
@@ -61,12 +61,11 @@ const authorizeUtilityCall = async (request: {
 };
 
 /**
- * Create a hardened embedded wallet for the browser.
+ * Create a persistent embedded wallet for the browser.
  *
- * Unlike the bare `EmbeddedWallet.create(url)`, this:
- * - uses IndexedDB-backed stores (fixed names, persistent across reloads)
- *   instead of sqlite-opfs WASM workers, which can hang indefinitely in some
- *   Chromium embeds / after COEP;
+ * Unlike an ephemeral wallet, this:
+ * - uses IndexedDB-backed stores with FIXED names (survive reloads, so the
+ *   same identity is recovered every session);
  * - tunes the proving backend for memory-constrained mobile browsers;
  * - whitelists ONLY the canonical registry contracts for cross-contract
  *   utility calls made during private execution (handshake discovery /
@@ -78,7 +77,7 @@ export async function createWallet({
 }: CreateWalletOptions = {}) {
   onProgress?.('Opening local PXE (IndexedDB)...');
   const node = createAztecNodeClient(getNodeUrl());
-  const log = createLogger('privazy');
+  const log = createLogger('salazy-wallet');
   const pxeStore: AztecAsyncKVStore = await AztecIndexedDBStore.open(
     log.createChild('pxe'),
     PXE_STORE_NAME,
@@ -117,7 +116,8 @@ export interface CreateSessionAccountResult {
  *
  * The account address is derived purely from random keys (no on-chain
  * deployment). Keys are stored in the persistent wallet DB, so the same
- * identity and inbox survive reloads.
+ * identity and inbox survive reloads. The wallet is only ever lost if the
+ * browser's site data (IndexedDB) is cleared.
  */
 export async function createSessionAccount(
   wallet: EmbeddedWallet,
