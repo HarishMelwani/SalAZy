@@ -164,6 +164,23 @@ function App() {
     }
   }, [walletRef]);
 
+  const handleDisconnect = useCallback(() => {
+    walletRef.employer = null;
+    walletRef.employee = null;
+    setEmployer(null);
+    setEmployee(null);
+    setTab('employer');
+    setSelectedId(null);
+    setNewBusinessName('');
+    setPayroll(null);
+    setPaychecks([]);
+    setBalance(0n);
+    setBusy('');
+    setLog([]);
+    setError('');
+    addLog('Disconnected');
+  }, [walletRef]);
+
   const refreshPayroll = useCallback(
     async (b: Business) => {
       if (!employer) return;
@@ -430,9 +447,16 @@ function App() {
             <div className="sub">Private payroll on Aztec</div>
           </div>
         </div>
-        <div className="status">
-          <span className="pulse" />
-          Aztec testnet · live
+        <div className="top-right">
+          <div className="status">
+            <span className="pulse" />
+            Aztec testnet · live
+          </div>
+          {connected && (
+            <button className="icon-btn disconnect" onClick={handleDisconnect}>
+              Disconnect
+            </button>
+          )}
         </div>
       </header>
 

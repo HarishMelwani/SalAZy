@@ -139,6 +139,12 @@ body::after {
   font-family: var(--mono);
 }
 
+.top-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .status {
   display: flex;
   align-items: center;
@@ -152,6 +158,16 @@ body::after {
   border-radius: 999px;
   padding: 6px 13px;
   background: rgba(255, 255, 255, 0.04);
+}
+
+.disconnect {
+  color: var(--rose);
+  border-color: rgba(255, 138, 122, 0.45);
+  background: rgba(255, 138, 122, 0.1);
+}
+
+.disconnect:hover {
+  background: rgba(255, 138, 122, 0.18);
 }
 
 .pulse {
