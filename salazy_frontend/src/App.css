@@ -683,6 +683,17 @@ code {
   color: var(--chartreuse);
 }
 
+.pc-deposited {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--chartreuse);
+  border: 1px solid color-mix(in srgb, var(--chartreuse) 40%, transparent);
+  padding: 4px 8px;
+  border-radius: 999px;
+}
+
 .balance-big {
   font-size: 40px;
   font-weight: 800;

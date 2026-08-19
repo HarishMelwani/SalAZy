@@ -40,28 +40,32 @@ unconstrained fn funding_is_private_to_the_employer() {
 }
 
 #[test]
-unconstrained fn issued_salary_lands_in_the_employees_inbox() {
+unconstrained fn issued_salary_lands_directly_in_the_employees_balance() {
     let (env, contract_address, alice, bob) = setup();
 
     env.call_private(alice, SalAZy::at(contract_address).issue_salary(1, 1, bob, 100, 2));
 
-    let paychecks = env.execute_utility(SalAZy::at(contract_address).view_paychecks(bob));
-    assert_eq(paychecks.len(), 1);
-    assert_eq(paychecks.get(0).company, 1);
-    assert_eq(paychecks.get(0).epoch, 1);
-    assert_eq(paychecks.get(0).amount, 100);
-    assert_eq(paychecks.get(0).role, 2);
+    let notes = env.execute_utility(SalAZy::at(contract_address).view_balance_notes(bob));
+    assert_eq(notes.len(), 1);
+    assert_eq(notes.get(0).company, 1);
+    assert_eq(notes.get(0).epoch, 1);
+    assert_eq(notes.get(0).amount, 100);
+    assert_eq(notes.get(0).role, 2);
+
+    // Already credited: the balance shows the salary with no claim step.
+    let balance = env.execute_utility(SalAZy::at(contract_address).view_balance(bob));
+    assert_eq(balance, 100);
 }
 
 #[test]
-unconstrained fn employer_cannot_read_the_employees_paycheck() {
+unconstrained fn employer_cannot_read_the_employees_salary() {
     let (env, contract_address, alice, bob) = setup();
 
     env.call_private(alice, SalAZy::at(contract_address).issue_salary(1, 1, bob, 100, 2));
 
-    // Alice cannot decrypt Bob's paycheck, even though she created it.
-    let alice_paychecks = env.execute_utility(SalAZy::at(contract_address).view_paychecks(alice));
-    assert_eq(alice_paychecks.len(), 0);
+    // Alice cannot decrypt Bob's salary, even though she created it.
+    let alice_notes = env.execute_utility(SalAZy::at(contract_address).view_balance_notes(alice));
+    assert_eq(alice_notes.len(), 0);
 }
 
 #[test]
@@ -80,28 +84,24 @@ unconstrained fn batch_issue_pays_every_employee_in_one_tx() {
     let employees = employee_array([(bob, 100, 1), (carol, 250, 2), (AztecAddress::zero(), 0, 0)]);
     env.call_private(alice, SalAZy::at(contract_address).issue_salaries(1, 1, employees));
 
-    let bob_paychecks = env.execute_utility(SalAZy::at(contract_address).view_paychecks(bob));
-    assert_eq(bob_paychecks.len(), 1);
-    assert_eq(bob_paychecks.get(0).amount, 100);
+    let bob_notes = env.execute_utility(SalAZy::at(contract_address).view_balance_notes(bob));
+    assert_eq(bob_notes.len(), 1);
+    assert_eq(bob_notes.get(0).amount, 100);
 
-    let carol_paychecks = env.execute_utility(SalAZy::at(contract_address).view_paychecks(carol));
-    assert_eq(carol_paychecks.len(), 1);
-    assert_eq(carol_paychecks.get(0).amount, 250);
+    let carol_notes = env.execute_utility(SalAZy::at(contract_address).view_balance_notes(carol));
+    assert_eq(carol_notes.len(), 1);
+    assert_eq(carol_notes.get(0).amount, 250);
 }
 
 #[test]
-unconstrained fn employee_can_claim_into_their_private_balance() {
+unconstrained fn salary_is_credited_without_any_claim() {
     let (env, contract_address, alice, bob) = setup();
 
     env.call_private(alice, SalAZy::at(contract_address).issue_salary(1, 1, bob, 100, 2));
-    env.call_private(bob, SalAZy::at(contract_address).claim_salary(1));
 
+    // Bob never sends a transaction; the salary is already his.
     let balance = env.execute_utility(SalAZy::at(contract_address).view_balance(bob));
     assert_eq(balance, 100);
-
-    // The paycheck was spent; the inbox is now empty.
-    let paychecks = env.execute_utility(SalAZy::at(contract_address).view_paychecks(bob));
-    assert_eq(paychecks.len(), 0);
 }
 
 #[test]
@@ -142,13 +142,11 @@ unconstrained fn business_ledgers_are_isolated() {
 }
 
 #[test]
-unconstrained fn claiming_accumulates_across_epochs() {
+unconstrained fn salaries_accumulate_across_epochs_directly() {
     let (env, contract_address, alice, bob) = setup();
 
     env.call_private(alice, SalAZy::at(contract_address).issue_salary(1, 1, bob, 100, 1));
     env.call_private(alice, SalAZy::at(contract_address).issue_salary(1, 2, bob, 50, 1));
-    env.call_private(bob, SalAZy::at(contract_address).claim_salary(1));
-    env.call_private(bob, SalAZy::at(contract_address).claim_salary(2));
 
     let balance = env.execute_utility(SalAZy::at(contract_address).view_balance(bob));
     assert_eq(balance, 150);

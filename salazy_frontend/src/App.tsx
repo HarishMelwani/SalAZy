@@ -7,7 +7,6 @@ import { SALAZY_CONTRACT_ADDRESS } from './config';
 import { createWallet, createSessionAccount } from './wallet';
 import {
   attachToSalAZy,
-  claimSalary,
   encodeField,
   fund,
   isFullyPaid,
@@ -15,9 +14,9 @@ import {
   MAX_EMPLOYEES_PER_PAYRUN,
   proveFullyPaid,
   viewBalance,
+  viewBalanceNotes,
   viewFunding,
   viewIssued,
-  viewPaychecks,
   type EmployeeInput,
   type SalaryNote,
 } from './salazy';
@@ -184,15 +183,15 @@ function App() {
   const refreshEmployee = useCallback(async () => {
     if (!employee) return;
     try {
-      const [pc, bal] = await Promise.all([
-        viewPaychecks(employee.contract, employee.address),
+      const [notes, bal] = await Promise.all([
+        viewBalanceNotes(employee.contract, employee.address),
         viewBalance(employee.contract, employee.address),
       ]);
-      setPaychecks(pc);
+      setPaychecks(notes);
       setBalance(bal);
-      if (pc.length !== lastPaycheckCount.current) {
-        addLog(`Paychecks refreshed · ${pc.length} incoming`);
-        lastPaycheckCount.current = pc.length;
+      if (notes.length !== lastPaycheckCount.current) {
+        addLog(`Balance refreshed · ${notes.length} salary note${notes.length === 1 ? '' : 's'}`);
+        lastPaycheckCount.current = notes.length;
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -376,27 +375,6 @@ function App() {
       setBusy('');
     }
   }, [employer, selected, refreshPayroll]);
-
-  const handleClaim = useCallback(
-    async (epoch: string) => {
-      if (!employee) return;
-      setBusy(`claim-${epoch}`);
-      setError('');
-      try {
-        addLog(`Proving claim of epoch ${epoch} paychecks…`);
-        await claimSalary(employee.contract, employee.address, BigInt(epoch));
-        addLog(`Claimed epoch ${epoch} into private balance`);
-        setTimeout(refreshEmployee, 4000);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        setError(`Claim failed: ${msg}`);
-        addLog(`Claim error: ${msg}`, true);
-      } finally {
-        setBusy('');
-      }
-    },
-    [employee, refreshEmployee],
-  );
 
   const copyText = useCallback(async (text: string, label: string) => {
     try {
@@ -781,9 +759,7 @@ function App() {
                           </div>
                           <div className="pc-side">
                             <span className="pc-amount">{formatAmount(p.amount)}</span>
-                            <button className="btn small" onClick={() => handleClaim(p.epoch)}>
-                              Claim
-                            </button>
+                            <span className="pc-deposited">credited</span>
                           </div>
                         </div>
                       ))}
@@ -792,11 +768,11 @@ function App() {
                 </div>
 
                 <div className="card">
-                  <div className="card-title">Claimed balance</div>
+                  <div className="card-title">Balance</div>
                   <div className="balance-big">{formatAmount(balance)}</div>
                   <p className="muted">
-                    Claimed salaries live in your private balance ledger. Only
-                    you can ever see them.
+                    Salaries land here the moment payroll runs — nothing to
+                    claim. Only you can ever see them.
                   </p>
                 </div>
               </div>

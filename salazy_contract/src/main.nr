@@ -6,8 +6,9 @@
 /// notes too. A zero-knowledge `prove_fully_paid` asserts that what was issued
 /// equals what was funded for a pay period - revealing zero individual amounts.
 ///
-/// Employees discover their paychecks via non-interactive handshakes anchored in
-/// the canonical HandshakeRegistry, so they need no prior registration.
+/// Employees receive their salary directly in their private balance ledger via
+/// non-interactive handshakes anchored in the canonical HandshakeRegistry, so
+/// they need no prior registration - and nothing to claim.
 #[aztec::macros::aztec]
 pub contract SalAZy {
     use aztec::{
@@ -57,7 +58,8 @@ pub contract SalAZy {
         pub amount: Field,
     }
 
-    /// A paycheck, encrypted to the employee who may claim it.
+    /// A salary, encrypted to the employee it belongs to. Inserted directly into
+    /// the employee's balance ledger the moment payroll runs - no claim needed.
     #[derive(Deserialize, Eq, Packable, Serialize)]
     #[note]
     pub struct SalaryNote {
@@ -71,7 +73,6 @@ pub contract SalAZy {
     struct Storage<Context> {
         funding: Owned<PrivateSet<FundingNote, Context>, Context>,
         issued: Owned<PrivateSet<IssuanceNote, Context>, Context>,
-        paychecks: Owned<PrivateSet<SalaryNote, Context>, Context>,
         balances: Owned<PrivateSet<SalaryNote, Context>, Context>,
     }
 
@@ -88,11 +89,11 @@ pub contract SalAZy {
         self.storage.funding.at(employer).insert(note).deliver(MessageDelivery::onchain_unconstrained());
     }
 
-    /// Issues a single salary: a paycheck encrypted to `employee`, plus a matching
-    /// entry in the employer's private issuance ledger.
+    /// Issues a single salary: credited directly to the employee's private
+    /// balance, plus a matching entry in the employer's private issuance ledger.
     #[external("private")]
     fn issue_salary(company: Field, epoch: Field, employee: AztecAddress, amount: Field, role: Field) {
-        self.internal.insert_paycheck(company, epoch, employee, amount, role);
+        self.internal.insert_balance(company, epoch, employee, amount, role);
         let employer = self.msg_sender();
         let issuance = IssuanceNote { company, epoch, amount };
         self.storage.issued.at(employer).insert(issuance).deliver(MessageDelivery::onchain_unconstrained());
@@ -106,26 +107,9 @@ pub contract SalAZy {
         for i in 0..MAX_EMPLOYEES_PER_PAYRUN {
             let employee = employees[i];
             if !employee.address.is_zero() {
-                self.internal.insert_paycheck(company, epoch, employee.address, employee.amount, employee.role);
+                self.internal.insert_balance(company, epoch, employee.address, employee.amount, employee.role);
                 let issuance = IssuanceNote { company, epoch, amount: employee.amount };
                 self.storage.issued.at(employer).insert(issuance).deliver(MessageDelivery::onchain_unconstrained());
-            }
-        }
-    }
-
-    /// Employee claims every paycheck from `epoch`: the notes are nullified
-    /// (spent) and re-inserted into the employee's private balance ledger.
-    #[external("private")]
-    fn claim_salary(epoch: Field) {
-        let employee = self.msg_sender();
-        let props = SalaryNote::properties();
-        let mut options = NoteGetterOptions::<SalaryNote, <SalaryNote as Packable>::N, Field, Field>::new();
-        options.select(props.epoch, Comparator.EQ, epoch);
-        let paychecks = self.storage.paychecks.at(employee).pop_notes(options);
-        for i in 0..MAX_NOTE_HASH_READ_REQUESTS_PER_CALL {
-            if i < paychecks.len() {
-                let note = paychecks.get_unchecked(i);
-                self.storage.balances.at(employee).insert(note).deliver(MessageDelivery::onchain_unconstrained());
             }
         }
     }
@@ -180,12 +164,13 @@ pub contract SalAZy {
         total
     }
 
-    /// Inserts a paycheck into an employee's inbox, encrypted to them and
-    /// discovered via a non-interactive handshake (no prior registration needed).
+    /// Credits a salary directly into an employee's balance, encrypted to them
+    /// and discovered via a non-interactive handshake (no prior registration or
+    /// claim needed).
     #[internal("private")]
-    fn insert_paycheck(company: Field, epoch: Field, employee: AztecAddress, amount: Field, role: Field) {
+    fn insert_balance(company: Field, epoch: Field, employee: AztecAddress, amount: Field, role: Field) {
         let note = SalaryNote { company, epoch, amount, role };
-        self.storage.paychecks.at(employee).insert(note).deliver(
+        self.storage.balances.at(employee).insert(note).deliver(
             MessageDelivery::onchain_unconstrained().via_non_interactive_handshake(),
         );
     }
@@ -265,14 +250,14 @@ pub contract SalAZy {
         funded == issued
     }
 
-    /// Employee's incoming paychecks (only they can decrypt these).
+    /// Employee's salary notes (only they can decrypt these).
     #[external("utility")]
-    unconstrained fn view_paychecks(owner: AztecAddress) -> BoundedVec<SalaryNote, MAX_NOTES_PER_PAGE> {
+    unconstrained fn view_balance_notes(owner: AztecAddress) -> BoundedVec<SalaryNote, MAX_NOTES_PER_PAGE> {
         let options = NoteViewerOptions::<SalaryNote, <SalaryNote as Packable>::N>::new();
-        self.storage.paychecks.at(owner).view_notes(options)
+        self.storage.balances.at(owner).view_notes(options)
     }
 
-    /// Employee's claimed balance (sum across all pay periods).
+    /// Employee's balance (sum across all pay periods).
     #[external("utility")]
     unconstrained fn view_balance(owner: AztecAddress) -> Field {
         let options = NoteViewerOptions::<SalaryNote, <SalaryNote as Packable>::N>::new();

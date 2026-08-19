@@ -103,17 +103,6 @@ export async function issueSalaries(
     .send({ from, fee: { paymentMethod } });
 }
 
-export async function claimSalary(
-  contract: SalAZyContract,
-  from: AztecAddress,
-  epoch: bigint,
-) {
-  const paymentMethod = await feeMethod();
-  return contract.methods
-    .claim_salary(epoch)
-    .send({ from, fee: { paymentMethod } });
-}
-
 export async function proveFullyPaid(
   contract: SalAZyContract,
   from: AztecAddress,
@@ -162,12 +151,12 @@ export async function isFullyPaid(
   return sim.result as boolean;
 }
 
-export async function viewPaychecks(
+export async function viewBalanceNotes(
   contract: SalAZyContract,
   owner: AztecAddress,
 ): Promise<SalaryNote[]> {
   const sim = await contract.methods
-    .view_paychecks(owner)
+    .view_balance_notes(owner)
     .simulate({ from: owner });
   const result = sim.result as {
     len: number;
