@@ -12,11 +12,13 @@ import {
   fund,
   isFullyPaid,
   issueSalaries,
+  MAX_EMPLOYEES_PER_PAYRUN,
   proveFullyPaid,
   viewBalance,
   viewFunding,
   viewIssued,
   viewPaychecks,
+  type EmployeeInput,
   type SalaryNote,
 } from './salazy';
 import './App.css';
@@ -329,14 +331,17 @@ function App() {
         amount: parseAmount(e.salary)!,
         role: encodeField(e.role),
       }));
-      addLog(`Proving batch pay for ${rows.length} employee${rows.length === 1 ? '' : 's'}…`);
-      await issueSalaries(
-        employer.contract,
-        employer.address,
-        company,
-        BigInt(selected.epoch),
-        employees,
-      );
+      const batches: EmployeeInput[][] = [];
+      for (let i = 0; i < employees.length; i += MAX_EMPLOYEES_PER_PAYRUN) {
+        batches.push(employees.slice(i, i + MAX_EMPLOYEES_PER_PAYRUN));
+      }
+      for (let b = 0; b < batches.length; b++) {
+        const batch = batches[b];
+        addLog(
+          `Proving batch pay ${b + 1}/${batches.length} (${batch.length} employee${batch.length === 1 ? '' : 's'})…`,
+        );
+        await issueSalaries(employer.contract, employer.address, company, BigInt(selected.epoch), batch);
+      }
       addLog(`Paid ${rows.length} employee${rows.length === 1 ? '' : 's'} privately (epoch ${selected.epoch})`);
       const next = businesses.map((b) =>
         b.id === selected.id ? { ...b, epoch: b.epoch + 1 } : b,
