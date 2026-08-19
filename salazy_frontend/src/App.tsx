@@ -471,17 +471,6 @@ function App() {
           <button className="btn primary big" onClick={handleConnect} disabled={connecting}>
             Open SalAZy
           </button>
-          <div className="ticker">
-            <div className="ticker-track">
-              {Array.from({ length: 2 }).flatMap((_, k) =>
-                Array.from({ length: 6 }).map((__, i) => (
-                  <span key={`${k}-${i}`} className={i % 3 === 1 ? 'tick hot' : i % 3 === 2 ? 'tick cool' : 'tick'}>
-                    PRIVATE PAYROLL ✦ ZERO-KNOWLEDGE ✦ AZTEC TESTNET ✦
-                  </span>
-                )),
-              )}
-            </div>
-          </div>
         </section>
       )}
 
