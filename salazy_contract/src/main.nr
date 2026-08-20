@@ -27,7 +27,7 @@ pub contract SalAZy {
         note_viewer_options::NoteViewerOptions,
     };
     use aztec::protocol::constants::MAX_NOTE_HASH_READ_REQUESTS_PER_CALL;
-    use aztec::utils::comparison::Comparator;
+    use aztec::utils::comparison::{Comparator, compare};
 
     /// Maximum number of employees paid in a single private transaction.
     global MAX_EMPLOYEES_PER_PAYRUN: u32 = 8;
@@ -115,17 +115,18 @@ pub contract SalAZy {
     }
 
     /// ZERO-KNOWLEDGE PROOF: asserts that the employer planned to pay `total`
-    /// this period, funded exactly that, and issued exactly that. All three are
+    /// this period, funded at least that, and issued exactly that. All three are
     /// private inputs/ledgers, so no individual amount is ever revealed - the
     /// transaction landing IS the proof. Requires a non-zero total, so an empty
-    /// or unpaid period can never "prove" itself fully paid.
+    /// or unpaid period can never "prove" itself fully paid. Over-funding is
+    /// allowed: leftover funding simply stays in the ledger for future periods.
     #[external("private")]
     fn prove_fully_paid(company: Field, epoch: Field, total: Field) {
         assert(total != 0, "SalAZy: nothing to prove");
         let funded = self.internal.sum_funding(company, epoch);
         let issued = self.internal.sum_issued(company, epoch);
-        assert(funded == total, "SalAZy: funded != planned total");
-        assert(funded == issued, "SalAZy: issued != funded for this period");
+        assert(compare(funded, Comparator.GTE, total), "SalAZy: funded < planned total");
+        assert(issued == total, "SalAZy: issued != planned total");
     }
 
     /// Sums the employer's private funding notes for a business and pay period.

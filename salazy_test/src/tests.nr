@@ -112,11 +112,11 @@ unconstrained fn prove_fully_paid_succeeds_when_funded_equals_issued() {
     env.call_private(alice, SalAZy::at(contract_address).issue_salary(1, 1, bob, 100, 1));
     env.call_private(alice, SalAZy::at(contract_address).issue_salary(1, 1, bob, 200, 2));
 
-    // The ZK proof lands only if planned total == funded == issued, revealing no amounts.
+    // The ZK proof lands if planned total was funded and every salary issued.
     env.call_private(alice, SalAZy::at(contract_address).prove_fully_paid(1, 1, 300));
 }
 
-#[test(should_fail_with = "funded != planned total")]
+#[test(should_fail_with = "funded < planned total")]
 unconstrained fn prove_fully_paid_fails_when_underfunded() {
     let (env, contract_address, alice, bob) = setup();
 
@@ -125,6 +125,29 @@ unconstrained fn prove_fully_paid_fails_when_underfunded() {
     env.call_private(alice, SalAZy::at(contract_address).issue_salary(1, 1, bob, 100, 2));
 
     env.call_private(alice, SalAZy::at(contract_address).prove_fully_paid(1, 1, 200));
+}
+
+#[test(should_fail_with = "issued != planned total")]
+unconstrained fn prove_fully_paid_fails_when_not_everyone_issued() {
+    let (env, contract_address, alice, bob) = setup();
+
+    env.call_private(alice, SalAZy::at(contract_address).fund(1, 1, 200));
+    env.call_private(alice, SalAZy::at(contract_address).issue_salary(1, 1, bob, 100, 1));
+
+    // Funded enough, but only 100 of the planned 200 was issued.
+    env.call_private(alice, SalAZy::at(contract_address).prove_fully_paid(1, 1, 200));
+}
+
+#[test]
+unconstrained fn prove_fully_paid_succeeds_with_leftover_funding() {
+    let (env, contract_address, alice, bob) = setup();
+
+    // Over-funding (500 vs planned 300) must not break the proof.
+    env.call_private(alice, SalAZy::at(contract_address).fund(1, 1, 500));
+    env.call_private(alice, SalAZy::at(contract_address).issue_salary(1, 1, bob, 100, 1));
+    env.call_private(alice, SalAZy::at(contract_address).issue_salary(1, 1, bob, 200, 2));
+
+    env.call_private(alice, SalAZy::at(contract_address).prove_fully_paid(1, 1, 300));
 }
 
 #[test(should_fail_with = "nothing to prove")]

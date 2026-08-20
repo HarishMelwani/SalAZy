@@ -1,7 +1,7 @@
 // Aztec Testnet — the only supported network.
 // Populated after the SalAZy contract is deployed.
 export const SALAZY_CONTRACT_ADDRESS =
-  '0x105669d0b62499c974d5a4a130711b12d5d0e5402b5538775a64ea3d4e01ed77';
+  '0x0bb0eaedd9fce0f92b63293f179b7b652cf0edfb037840101f987f77d9881af2';
 
 export function getNodeUrl(): string {
   const env = (import.meta as unknown as { env?: { VITE_AZTEC_NODE_URL?: string } })
