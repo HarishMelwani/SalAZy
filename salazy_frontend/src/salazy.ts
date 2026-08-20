@@ -108,10 +108,11 @@ export async function proveFullyPaid(
   from: AztecAddress,
   company: Fr,
   epoch: bigint,
+  total: bigint,
 ) {
   const paymentMethod = await feeMethod();
   return contract.methods
-    .prove_fully_paid(company, epoch)
+    .prove_fully_paid(company, epoch, total)
     .send({ from, fee: { paymentMethod } });
 }
 

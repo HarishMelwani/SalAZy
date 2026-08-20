@@ -409,12 +409,20 @@ function App() {
 
   const handleProve = useCallback(async () => {
     if (!employer || !selected) return;
+    if (salaryTotal <= 0n) {
+      setError('Nothing to prove yet — add employees and run payroll first');
+      return;
+    }
+    if (!fundedOk) {
+      setError('Payroll is not fully funded yet');
+      return;
+    }
     setBusy('prove');
     setError('');
     try {
       const company = encodeField(selected.name);
       addLog(`Building ZK proof issued == funded…`);
-      await proveFullyPaid(employer.contract, employer.address, company, BigInt(selected.epoch));
+      await proveFullyPaid(employer.contract, employer.address, company, BigInt(selected.epoch), salaryTotal);
       addLog(`✓ PROVED fully paid for epoch ${selected.epoch} — zero amounts revealed`);
       setTimeout(() => refreshPayroll(selected), 4000);
     } catch (err) {
@@ -424,7 +432,7 @@ function App() {
     } finally {
       setBusy('');
     }
-  }, [employer, selected, refreshPayroll]);
+  }, [employer, selected, refreshPayroll, salaryTotal, fundedOk]);
 
   const copyText = useCallback(async (text: string, label: string) => {
     try {
@@ -762,7 +770,7 @@ function App() {
                         <button
                           className="btn outline"
                           onClick={handleProve}
-                          disabled={busy === 'prove'}
+                          disabled={busy === 'prove' || busy === 'pay' || salaryTotal <= 0n || !fundedOk}
                         >
                           {busy === 'prove' ? 'Proving…' : 'Prove fully paid'}
                         </button>

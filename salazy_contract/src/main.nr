@@ -114,13 +114,17 @@ pub contract SalAZy {
         }
     }
 
-    /// ZERO-KNOWLEDGE PROOF: asserts that what the employer issued equals what it
-    /// funded for `company` at `epoch`. Both ledgers are private, so no individual
-    /// amount is ever revealed - the transaction landing IS the proof.
+    /// ZERO-KNOWLEDGE PROOF: asserts that the employer planned to pay `total`
+    /// this period, funded exactly that, and issued exactly that. All three are
+    /// private inputs/ledgers, so no individual amount is ever revealed - the
+    /// transaction landing IS the proof. Requires a non-zero total, so an empty
+    /// or unpaid period can never "prove" itself fully paid.
     #[external("private")]
-    fn prove_fully_paid(company: Field, epoch: Field) {
+    fn prove_fully_paid(company: Field, epoch: Field, total: Field) {
+        assert(total != 0, "SalAZy: nothing to prove");
         let funded = self.internal.sum_funding(company, epoch);
         let issued = self.internal.sum_issued(company, epoch);
+        assert(funded == total, "SalAZy: funded != planned total");
         assert(funded == issued, "SalAZy: issued != funded for this period");
     }
 

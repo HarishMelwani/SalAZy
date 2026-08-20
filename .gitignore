@@ -1,0 +1,6 @@
+node_modules/
+dist/
+codegenCache.json
+salazy_frontend/aztec-wallet-data/
+target/*
+!target/salazy_contract-SalAZy.json

@@ -112,11 +112,11 @@ unconstrained fn prove_fully_paid_succeeds_when_funded_equals_issued() {
     env.call_private(alice, SalAZy::at(contract_address).issue_salary(1, 1, bob, 100, 1));
     env.call_private(alice, SalAZy::at(contract_address).issue_salary(1, 1, bob, 200, 2));
 
-    // The ZK proof lands only if issued == funded, revealing no amounts.
-    env.call_private(alice, SalAZy::at(contract_address).prove_fully_paid(1, 1));
+    // The ZK proof lands only if planned total == funded == issued, revealing no amounts.
+    env.call_private(alice, SalAZy::at(contract_address).prove_fully_paid(1, 1, 300));
 }
 
-#[test(should_fail_with = "issued != funded")]
+#[test(should_fail_with = "funded != planned total")]
 unconstrained fn prove_fully_paid_fails_when_underfunded() {
     let (env, contract_address, alice, bob) = setup();
 
@@ -124,7 +124,15 @@ unconstrained fn prove_fully_paid_fails_when_underfunded() {
     env.call_private(alice, SalAZy::at(contract_address).issue_salary(1, 1, bob, 100, 1));
     env.call_private(alice, SalAZy::at(contract_address).issue_salary(1, 1, bob, 100, 2));
 
-    env.call_private(alice, SalAZy::at(contract_address).prove_fully_paid(1, 1));
+    env.call_private(alice, SalAZy::at(contract_address).prove_fully_paid(1, 1, 200));
+}
+
+#[test(should_fail_with = "nothing to prove")]
+unconstrained fn prove_fully_paid_fails_when_nothing_funded_or_issued() {
+    let (env, contract_address, alice, bob) = setup();
+
+    // No funding, no salaries: must NOT prove itself fully paid.
+    env.call_private(alice, SalAZy::at(contract_address).prove_fully_paid(1, 1, 0));
 }
 
 #[test]
