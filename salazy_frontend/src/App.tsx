@@ -323,8 +323,8 @@ function App() {
     try {
       const company = encodeField(selected.name);
       addLog(`Proving & funding epoch ${selected.epoch}…`);
-      await fund(employer.contract, employer.address, company, BigInt(selected.epoch), amount);
-      addLog(`Funded ${formatAmount(amount)} for epoch ${selected.epoch}`);
+      const txHash = await fund(employer.contract, employer.address, company, BigInt(selected.epoch), amount);
+      addLog(`Funded ${formatAmount(amount)} for epoch ${selected.epoch} · tx ${shortAddress(txHash, 8)}`);
       setFundAmount('');
       setTimeout(() => refreshPayroll(selected), 4000);
     } catch (err) {
@@ -380,14 +380,20 @@ function App() {
       for (let i = 0; i < employees.length; i += MAX_EMPLOYEES_PER_PAYRUN) {
         batches.push(employees.slice(i, i + MAX_EMPLOYEES_PER_PAYRUN));
       }
+      const hashes: string[] = [];
       for (let b = 0; b < batches.length; b++) {
         const batch = batches[b];
         addLog(
           `Proving batch pay ${b + 1}/${batches.length} (${batch.length} employee${batch.length === 1 ? '' : 's'})…`,
         );
-        await issueSalaries(employer.contract, employer.address, company, BigInt(selected.epoch), batch);
+        const txHash = await issueSalaries(employer.contract, employer.address, company, BigInt(selected.epoch), batch);
+        hashes.push(txHash);
       }
-      addLog(`Paid ${rows.length} employee${rows.length === 1 ? '' : 's'} privately (epoch ${selected.epoch})`);
+      addLog(
+        `Paid ${rows.length} employee${rows.length === 1 ? '' : 's'} privately (epoch ${selected.epoch}) · tx ${hashes
+          .map((h) => shortAddress(h, 8))
+          .join(', ')}`,
+      );
       showToast(`Paid ${rows.length} employee${rows.length === 1 ? '' : 's'} ✓`);
       setPayroll(null);
       setTimeout(() => refreshPayroll(selected), 4000);
@@ -427,8 +433,8 @@ function App() {
     try {
       const company = encodeField(selected.name);
       addLog(`Building ZK proof issued == funded…`);
-      await proveFullyPaid(employer.contract, employer.address, company, BigInt(selected.epoch), salaryTotal);
-      addLog(`✓ PROVED fully paid for epoch ${selected.epoch} — zero amounts revealed`);
+      const txHash = await proveFullyPaid(employer.contract, employer.address, company, BigInt(selected.epoch), salaryTotal);
+      addLog(`✓ PROVED fully paid for epoch ${selected.epoch} · tx ${shortAddress(txHash, 8)} — zero amounts revealed`);
       showToast('Proved fully paid ✓');
       setTimeout(() => refreshPayroll(selected), 4000);
     } catch (err) {

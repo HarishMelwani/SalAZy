@@ -64,11 +64,12 @@ export async function fund(
   company: Fr,
   epoch: bigint,
   amount: bigint,
-) {
+): Promise<string> {
   const paymentMethod = await feeMethod();
-  return contract.methods
+  const result = await contract.methods
     .fund(company, epoch, amount)
     .send({ from, fee: { paymentMethod } });
+  return result.receipt.txHash.toString();
 }
 
 export async function issueSalary(
@@ -79,11 +80,12 @@ export async function issueSalary(
   employee: AztecAddress,
   amount: bigint,
   role: Fr,
-) {
+): Promise<string> {
   const paymentMethod = await feeMethod();
-  return contract.methods
+  const result = await contract.methods
     .issue_salary(company, epoch, employee, amount, role)
     .send({ from, fee: { paymentMethod } });
+  return result.receipt.txHash.toString();
 }
 
 export async function issueSalaries(
@@ -92,15 +94,16 @@ export async function issueSalaries(
   company: Fr,
   epoch: bigint,
   employees: EmployeeInput[],
-) {
+): Promise<string> {
   const padded: EmployeeInput[] = employees.slice(0, MAX_EMPLOYEES_PER_PAYRUN);
   while (padded.length < MAX_EMPLOYEES_PER_PAYRUN) {
     padded.push({ address: AztecAddress.ZERO, amount: 0n, role: new Fr(0n) });
   }
   const paymentMethod = await feeMethod();
-  return contract.methods
+  const result = await contract.methods
     .issue_salaries(company, epoch, padded)
     .send({ from, fee: { paymentMethod } });
+  return result.receipt.txHash.toString();
 }
 
 export async function proveFullyPaid(
@@ -109,11 +112,12 @@ export async function proveFullyPaid(
   company: Fr,
   epoch: bigint,
   total: bigint,
-) {
+): Promise<string> {
   const paymentMethod = await feeMethod();
-  return contract.methods
+  const result = await contract.methods
     .prove_fully_paid(company, epoch, total)
     .send({ from, fee: { paymentMethod } });
+  return result.receipt.txHash.toString();
 }
 
 export async function viewFunding(
