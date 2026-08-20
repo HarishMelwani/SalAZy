@@ -422,18 +422,6 @@ function App() {
 
   const handleProve = useCallback(async () => {
     if (!employer || !selected) return;
-    if (salaryTotal <= 0n) {
-      setError('Nothing to prove yet — add employees and run payroll first');
-      return;
-    }
-    if (!alreadyPaid) {
-      setError('Not paid yet — pay everyone first');
-      return;
-    }
-    if (!fundedOk) {
-      setError('Payroll is not fully funded yet');
-      return;
-    }
     setBusy('prove');
     setError('');
     try {
@@ -441,15 +429,16 @@ function App() {
       addLog(`Building ZK proof issued == funded…`);
       await proveFullyPaid(employer.contract, employer.address, company, BigInt(selected.epoch), salaryTotal);
       addLog(`✓ PROVED fully paid for epoch ${selected.epoch} — zero amounts revealed`);
+      showToast('Proved fully paid ✓');
       setTimeout(() => refreshPayroll(selected), 4000);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      setError(`Proof failed: ${msg}`);
-      addLog(`Proof error: ${msg}`, true);
+      setError(msg);
+      addLog(`Not paid: ${msg}`, true);
     } finally {
       setBusy('');
     }
-  }, [employer, selected, refreshPayroll, salaryTotal, fundedOk, alreadyPaid]);
+  }, [employer, selected, refreshPayroll, salaryTotal]);
 
   const copyText = useCallback(async (text: string, label: string) => {
     try {
@@ -806,28 +795,10 @@ function App() {
                         <button
                           className="btn outline"
                           onClick={handleProve}
-                          disabled={
-                            busy === 'prove' ||
-                            busy === 'pay' ||
-                            salaryTotal <= 0n ||
-                            !fundedOk ||
-                            !alreadyPaid
-                          }
-                          title={
-                            !alreadyPaid
-                              ? 'Pay everyone first'
-                              : !fundedOk
-                                ? 'Fund the period first'
-                                : 'Prove this period was fully paid, revealing zero amounts'
-                          }
+                          disabled={busy !== ''}
+                          title="Check this period: proves fully paid, or fails with 'not paid'"
                         >
-                          {busy === 'prove'
-                            ? 'Proving…'
-                            : alreadyPaid && fundedOk
-                              ? 'Prove fully paid'
-                              : !alreadyPaid
-                                ? 'Not paid yet'
-                                : 'Fund required first'}
+                          {busy === 'prove' ? 'Proving…' : 'Prove fully paid'}
                         </button>
                       </div>
                     </div>
