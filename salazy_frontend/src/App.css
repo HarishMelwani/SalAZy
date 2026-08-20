@@ -527,6 +527,21 @@ body::after {
   flex: none;
 }
 
+.card-title.head-row {
+  justify-content: space-between;
+  width: 100%;
+}
+
+.card-title.head-row span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-title.head-row .btn.small {
+  margin-left: auto;
+}
+
 .card.head {
   display: flex;
   align-items: center;

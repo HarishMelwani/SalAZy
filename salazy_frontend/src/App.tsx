@@ -308,6 +308,8 @@ function App() {
   const fundedOk =
     currentPayroll !== null && salaryTotal > 0n && currentPayroll.funded >= salaryTotal;
   const canPay = activeEmployees.length > 0 && fundedOk;
+  const alreadyPaid =
+    currentPayroll !== null && salaryTotal > 0n && currentPayroll.issued >= salaryTotal;
 
   const handleFund = useCallback(async () => {
     if (!employer || !selected) return;
@@ -336,6 +338,11 @@ function App() {
 
   const handlePayEveryone = useCallback(async () => {
     if (!employer || !selected) return;
+    if (alreadyPaid) {
+      setError('Everyone was already paid this period — start a new period to pay again');
+      addLog('Blocked: this period is already fully paid', true);
+      return;
+    }
     const rows = activeEmployees;
     if (rows.length === 0) {
       setError('Add at least one employee first');
@@ -382,12 +389,8 @@ function App() {
       }
       addLog(`Paid ${rows.length} employee${rows.length === 1 ? '' : 's'} privately (epoch ${selected.epoch})`);
       showToast(`Paid ${rows.length} employee${rows.length === 1 ? '' : 's'} ✓`);
-      const next = businesses.map((b) =>
-        b.id === selected.id ? { ...b, epoch: b.epoch + 1 } : b,
-      );
-      saveBusiness(next);
       setPayroll(null);
-      setTimeout(() => refreshPayroll({ ...selected, epoch: selected.epoch + 1 }), 4000);
+      setTimeout(() => refreshPayroll(selected), 4000);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setError(`Payroll failed: ${msg}`);
@@ -398,19 +401,33 @@ function App() {
   }, [
     employer,
     selected,
-    businesses,
-    saveBusiness,
     refreshPayroll,
     activeEmployees,
     payrollShortfall,
     currentPayroll,
     salaryTotal,
+    alreadyPaid,
   ]);
+
+  const handleNextPeriod = useCallback(() => {
+    if (!selected) return;
+    const next = businesses.map((b) =>
+      b.id === selected.id ? { ...b, epoch: b.epoch + 1 } : b,
+    );
+    saveBusiness(next);
+    setPayroll(null);
+    setFundAmount('');
+    addLog(`Started period ${selected.epoch + 1}`);
+  }, [businesses, selected, saveBusiness]);
 
   const handleProve = useCallback(async () => {
     if (!employer || !selected) return;
     if (salaryTotal <= 0n) {
       setError('Nothing to prove yet — add employees and run payroll first');
+      return;
+    }
+    if (!alreadyPaid) {
+      setError('Not paid yet — pay everyone first');
       return;
     }
     if (!fundedOk) {
@@ -432,7 +449,7 @@ function App() {
     } finally {
       setBusy('');
     }
-  }, [employer, selected, refreshPayroll, salaryTotal, fundedOk]);
+  }, [employer, selected, refreshPayroll, salaryTotal, fundedOk, alreadyPaid]);
 
   const copyText = useCallback(async (text: string, label: string) => {
     try {
@@ -626,8 +643,8 @@ function App() {
                           </div>
                           {payroll.funded === 0n && payroll.issued === 0n ? (
                             <div className="chip muted-chip">Not started</div>
-                          ) : payroll.fullyPaid ? (
-                            <div className="chip ok-chip">Fully paid ✓</div>
+                          ) : alreadyPaid ? (
+                            <div className="chip ok-chip">Paid ✓</div>
                           ) : (
                             <div className="chip warn-chip">Partial</div>
                           )}
@@ -700,7 +717,16 @@ function App() {
                     </div>
 
                     <div className="card">
-                      <div className="card-title">Payroll · epoch {selected.epoch}</div>
+                      <div className="card-title head-row">
+                        <span>Payroll · epoch {selected.epoch}</span>
+                        <button
+                          className="btn small"
+                          onClick={handleNextPeriod}
+                          disabled={busy !== ''}
+                        >
+                          Next period ›
+                        </button>
+                      </div>
                       <p className="muted">
                         Fund the period, then pay everyone with one click. Each
                         salary is a private encrypted note; amounts stay hidden.
@@ -723,22 +749,26 @@ function App() {
                         <button
                           className="btn primary"
                           onClick={handlePayEveryone}
-                          disabled={busy === 'pay' || !canPay}
+                          disabled={busy === 'pay' || !canPay || alreadyPaid}
                           title={
-                            payrollShortfall !== null
-                              ? `Fund ${formatAmount(payrollShortfall)} more to cover payroll`
-                              : !fundedOk
-                                ? 'Syncing on-chain funding…'
-                                : activeEmployees.length === 0
-                                  ? 'Add employees first'
-                                  : 'Pay everyone privately'
+                            alreadyPaid
+                              ? 'Everyone was already paid this period'
+                              : payrollShortfall !== null
+                                ? `Fund ${formatAmount(payrollShortfall)} more to cover payroll`
+                                : !fundedOk
+                                  ? 'Syncing on-chain funding…'
+                                  : activeEmployees.length === 0
+                                    ? 'Add employees first'
+                                    : 'Pay everyone privately'
                           }
                         >
                           {busy === 'pay'
                             ? 'Paying everyone…'
-                            : payrollShortfall !== null
-                              ? 'Fund required first'
-                              : 'Pay everyone'}
+                            : alreadyPaid
+                              ? 'Already paid ✓'
+                              : payrollShortfall !== null
+                                ? 'Fund required first'
+                                : 'Pay everyone'}
                         </button>
                         {payrollShortfall !== null && (
                           <div
@@ -767,12 +797,37 @@ function App() {
                             Fully funded · ready to pay {formatAmount(salaryTotal)}
                           </div>
                         )}
+                        {alreadyPaid && (
+                          <div className="pay-note ok">
+                            <span className="pay-note-dot" />
+                            Everyone paid ✓ — ready to prove fully paid
+                          </div>
+                        )}
                         <button
                           className="btn outline"
                           onClick={handleProve}
-                          disabled={busy === 'prove' || busy === 'pay' || salaryTotal <= 0n || !fundedOk}
+                          disabled={
+                            busy === 'prove' ||
+                            busy === 'pay' ||
+                            salaryTotal <= 0n ||
+                            !fundedOk ||
+                            !alreadyPaid
+                          }
+                          title={
+                            !alreadyPaid
+                              ? 'Pay everyone first'
+                              : !fundedOk
+                                ? 'Fund the period first'
+                                : 'Prove this period was fully paid, revealing zero amounts'
+                          }
                         >
-                          {busy === 'prove' ? 'Proving…' : 'Prove fully paid'}
+                          {busy === 'prove'
+                            ? 'Proving…'
+                            : alreadyPaid && fundedOk
+                              ? 'Prove fully paid'
+                              : !alreadyPaid
+                                ? 'Not paid yet'
+                                : 'Fund required first'}
                         </button>
                       </div>
                     </div>
