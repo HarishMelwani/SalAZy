@@ -81,36 +81,52 @@ pub contract SalAZy {
     fn constructor() {}
 
     /// Funds a pay period. The deposit is a private note in the employer's own
-    /// ledger; no one can see the amount.
+    /// ledger; no one can see the amount. Funding is aggregated into a single
+    /// note per (company, epoch): each call nullifies any prior funding for the
+    /// period and re-inserts one combined note. This keeps the note count read
+    /// by `prove_fully_paid` tiny regardless of how many times the employer tops
+    /// up the period.
     #[external("private")]
     fn fund(company: Field, epoch: Field, amount: Field) {
         let employer = self.msg_sender();
-        let note = FundingNote { company, epoch, amount };
+        let props = FundingNote::properties();
+        let mut options = NoteGetterOptions::<FundingNote, <FundingNote as Packable>::N, Field, Field>::new();
+        options.select(props.company, Comparator.EQ, company).select(props.epoch, Comparator.EQ, epoch);
+        let existing = self.storage.funding.at(employer).pop_notes(options);
+        let mut total = amount;
+        for i in 0..MAX_NOTE_HASH_READ_REQUESTS_PER_CALL {
+            if i < existing.len() {
+                total += existing.get_unchecked(i).amount;
+            }
+        }
+        let note = FundingNote { company, epoch, amount: total };
         self.storage.funding.at(employer).insert(note).deliver(MessageDelivery::onchain_unconstrained());
     }
 
     /// Issues a single salary: credited directly to the employee's private
     /// balance, plus a matching entry in the employer's private issuance ledger.
+    /// Issuance is aggregated into one note per (company, epoch), same as
+    /// funding, so the proof never has to read more than a couple of notes.
     #[external("private")]
     fn issue_salary(company: Field, epoch: Field, employee: AztecAddress, amount: Field, role: Field) {
         self.internal.insert_balance(company, epoch, employee, amount, role);
-        let employer = self.msg_sender();
-        let issuance = IssuanceNote { company, epoch, amount };
-        self.storage.issued.at(employer).insert(issuance).deliver(MessageDelivery::onchain_unconstrained());
+        self.internal.add_issuance(company, epoch, amount);
     }
 
     /// Pays every employee in one private transaction. Zero-address slots are
     /// skipped, so the array can be padded from the frontend.
     #[external("private")]
     fn issue_salaries(company: Field, epoch: Field, employees: [Employee; MAX_EMPLOYEES_PER_PAYRUN]) {
-        let employer = self.msg_sender();
+        let mut batch_total = 0 as Field;
         for i in 0..MAX_EMPLOYEES_PER_PAYRUN {
             let employee = employees[i];
             if !employee.address.is_zero() {
                 self.internal.insert_balance(company, epoch, employee.address, employee.amount, employee.role);
-                let issuance = IssuanceNote { company, epoch, amount: employee.amount };
-                self.storage.issued.at(employer).insert(issuance).deliver(MessageDelivery::onchain_unconstrained());
+                batch_total += employee.amount;
             }
+        }
+        if batch_total != 0 {
+            self.internal.add_issuance(company, epoch, batch_total);
         }
     }
 
@@ -178,6 +194,27 @@ pub contract SalAZy {
         self.storage.balances.at(employee).insert(note).deliver(
             MessageDelivery::onchain_unconstrained().via_non_interactive_handshake(),
         );
+    }
+
+    /// Aggregates the employer's issuance ledger: nullifies any prior issuance
+    /// note for the (company, epoch) and re-inserts a single note holding the
+    /// running total. Keeps the per-period issuance at one note, so the ZK proof
+    /// never has to read more than a handful of notes.
+    #[internal("private")]
+    fn add_issuance(company: Field, epoch: Field, amount: Field) {
+        let employer = self.msg_sender();
+        let props = IssuanceNote::properties();
+        let mut options = NoteGetterOptions::<IssuanceNote, <IssuanceNote as Packable>::N, Field, Field>::new();
+        options.select(props.company, Comparator.EQ, company).select(props.epoch, Comparator.EQ, epoch);
+        let existing = self.storage.issued.at(employer).pop_notes(options);
+        let mut total = amount;
+        for i in 0..MAX_NOTE_HASH_READ_REQUESTS_PER_CALL {
+            if i < existing.len() {
+                total += existing.get_unchecked(i).amount;
+            }
+        }
+        let issuance = IssuanceNote { company, epoch, amount: total };
+        self.storage.issued.at(employer).insert(issuance).deliver(MessageDelivery::onchain_unconstrained());
     }
 
     /// Employer's total funding for one business and pay period (private view).

@@ -182,3 +182,54 @@ unconstrained fn salaries_accumulate_across_epochs_directly() {
     let balance = env.execute_utility(SalAZy::at(contract_address).view_balance(bob));
     assert_eq(balance, 150);
 }
+
+// The user's real-world failure: 11 employees paid across 2 batches, with the
+// period funded multiple times. Every pay run and top-up used to insert its own
+// note, so the proof eventually read more than 16 note-hash read requests in a
+// single call frame and crashed with "push out of bounds". Aggregation keeps
+// funding and issuance at ONE note per (company, epoch) regardless of how many
+// times the employer pays or tops up.
+#[test]
+unconstrained fn prove_fully_paid_survives_many_notes_across_repeated_funding_and_batches() {
+    let (env, contract_address, alice, bob, carol, dave, erin, frank, grace, henry, iris, joe, kay) = {
+        let mut env = TestEnvironment::new();
+        let alice = env.create_light_account();
+        let bob = env.create_light_account();
+        let carol = env.create_light_account();
+        let dave = env.create_light_account();
+        let erin = env.create_light_account();
+        let frank = env.create_light_account();
+        let grace = env.create_light_account();
+        let henry = env.create_light_account();
+        let iris = env.create_light_account();
+        let joe = env.create_light_account();
+        let kay = env.create_light_account();
+        let initializer_call = SalAZy::interface().constructor();
+        let contract_address =
+            env.deploy("@salazy_contract/SalAZy").with_private_initializer(alice, initializer_call);
+        (env, contract_address, alice, bob, carol, dave, erin, frank, grace, henry, iris, joe, kay)
+    };
+
+    // Employer tops the period up 4 separate times (100 + 200 + 300 + 400 = 1000).
+    env.call_private(alice, SalAZy::at(contract_address).fund(1, 4, 100));
+    env.call_private(alice, SalAZy::at(contract_address).fund(1, 4, 200));
+    env.call_private(alice, SalAZy::at(contract_address).fund(1, 4, 300));
+    env.call_private(alice, SalAZy::at(contract_address).fund(1, 4, 400));
+
+    // Batch 1: 8 employees (max per tx), total 600.
+    let mut batch1 = employee_array([(bob, 100, 1), (carol, 100, 1), (dave, 50, 1)]);
+    batch1[3] = SalAZy::Employee { address: erin, amount: 100, role: 1 };
+    batch1[4] = SalAZy::Employee { address: frank, amount: 50, role: 1 };
+    batch1[5] = SalAZy::Employee { address: grace, amount: 100, role: 2 };
+    batch1[6] = SalAZy::Employee { address: henry, amount: 50, role: 2 };
+    batch1[7] = SalAZy::Employee { address: iris, amount: 50, role: 2 };
+    env.call_private(alice, SalAZy::at(contract_address).issue_salaries(1, 4, batch1));
+
+    // Batch 2: remaining 3 employees, total 300.
+    let batch2 = employee_array([(joe, 100, 1), (kay, 200, 2), (AztecAddress::zero(), 0, 0)]);
+    env.call_private(alice, SalAZy::at(contract_address).issue_salaries(1, 4, batch2));
+
+    // Planned total is 900 (600 + 300). The proof must land even though the
+    // combined ledger would previously have held 15 notes.
+    env.call_private(alice, SalAZy::at(contract_address).prove_fully_paid(1, 4, 900));
+}
