@@ -582,27 +582,53 @@ body::after {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 6px;
   background: var(--surface-2);
   color: var(--cream);
   border: 1px solid transparent;
   border-left: 3px solid transparent;
-  padding: 11px 13px;
+  padding: 5px 8px 5px 0;
   border-radius: 11px;
-  cursor: pointer;
   font-size: 14px;
-  text-align: left;
-  transition: border-color 0.12s ease, background 0.12s ease, transform 0.12s ease;
+  transition: border-color 0.12s ease, background 0.12s ease;
 }
 
 .business-row:hover {
   background: rgba(255, 255, 255, 0.1);
-  transform: translateX(2px);
 }
 
 .business-row.active {
   background: linear-gradient(90deg, rgba(124, 92, 255, 0.2), rgba(255, 78, 205, 0.08));
   border-color: rgba(124, 92, 255, 0.5);
   border-left-color: var(--magenta);
+}
+
+.business-main {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: none;
+  border: none;
+  color: inherit;
+  padding: 6px 6px;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.edit-inline {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+
+.edit-inline input {
+  flex: 1;
+  min-width: 0;
 }
 
 .bname {
@@ -737,6 +763,55 @@ code {
   color: var(--rose);
   border-color: rgba(255, 138, 122, 0.45);
   background: rgba(255, 138, 122, 0.12);
+}
+
+.icon-btn.edit {
+  color: var(--cyan);
+  border-color: rgba(25, 211, 255, 0.45);
+  background: rgba(25, 211, 255, 0.1);
+}
+
+.icon-btn.ok {
+  color: #9dffa6;
+  border-color: rgba(125, 255, 148, 0.45);
+  background: rgba(125, 255, 148, 0.12);
+}
+
+.emp-actions {
+  display: flex;
+  gap: 5px;
+  justify-content: flex-end;
+}
+
+.emp-actions .icon-btn {
+  padding: 4px 9px;
+  font-size: 12px;
+}
+
+.emp-row.edit-row {
+  grid-template-columns: 1.2fr 1.6fr 0.8fr 1fr auto;
+  gap: 8px;
+}
+
+.edit-row input {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--line-strong);
+  color: var(--cream);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 12.5px;
+  font-family: var(--sans);
+  min-width: 0;
+  width: 100%;
+}
+
+.edit-row input:focus {
+  outline: none;
+  border-color: var(--violet);
+}
+
+.edit-row .emp-edit-name {
+  font-weight: 600;
 }
 
 .log {

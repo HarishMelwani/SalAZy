@@ -112,6 +112,15 @@ function App() {
   const [businesses, setBusinesses] = useState<Business[]>(loadBusinesses);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [newBusinessName, setNewBusinessName] = useState('');
+  const [editingBusinessId, setEditingBusinessId] = useState<string | null>(null);
+  const [editingBusinessName, setEditingBusinessName] = useState('');
+  const [editingEmployeeId, setEditingEmployeeId] = useState<string | null>(null);
+  const [editingEmployeeForm, setEditingEmployeeForm] = useState({
+    name: '',
+    address: '',
+    salary: '',
+    role: '',
+  });
   const [employeeForm, setEmployeeForm] = useState({
     name: '',
     address: '',
@@ -365,6 +374,81 @@ function App() {
     },
     [businesses, selected, saveBusiness],
   );
+
+  const startEditEmployee = useCallback(
+    (empId: string) => {
+      if (!selected) return;
+      const emp = selected.employees.find((e) => e.id === empId);
+      if (!emp) return;
+      setEditingEmployeeId(empId);
+      setEditingEmployeeForm({
+        name: emp.name,
+        address: emp.address,
+        salary: emp.salary,
+        role: emp.role,
+      });
+    },
+    [selected],
+  );
+
+  const saveEditEmployee = useCallback(() => {
+    if (!selected || !editingEmployeeId) return;
+    const name = editingEmployeeForm.name.trim();
+    const address = editingEmployeeForm.address.trim();
+    if (!name || !address) {
+      setError('Name and wallet address are required');
+      return;
+    }
+    if (parseAmount(editingEmployeeForm.salary) === null && editingEmployeeForm.salary.trim() !== '') {
+      setError('Salary must be a number like 1200.00');
+      return;
+    }
+    saveBusiness(
+      businesses.map((b) =>
+        b.id === selected.id
+          ? {
+              ...b,
+              employees: b.employees.map((e) =>
+                e.id === editingEmployeeId
+                  ? {
+                      ...e,
+                      name,
+                      address,
+                      salary: editingEmployeeForm.salary.trim() || '0',
+                      role: editingEmployeeForm.role.trim(),
+                    }
+                  : e,
+              ),
+            }
+          : b,
+      ),
+    );
+    setEditingEmployeeId(null);
+    addLog(`Updated employee ${name}`);
+  }, [businesses, selected, editingEmployeeId, editingEmployeeForm, saveBusiness]);
+
+  const startEditBusiness = useCallback(
+    (bizId: string) => {
+      const biz = businesses.find((b) => b.id === bizId);
+      if (!biz) return;
+      setEditingBusinessId(bizId);
+      setEditingBusinessName(biz.name);
+    },
+    [businesses],
+  );
+
+  const saveEditBusiness = useCallback(() => {
+    if (!editingBusinessId) return;
+    const name = editingBusinessName.trim();
+    if (!name) {
+      setError('Business name is required');
+      return;
+    }
+    saveBusiness(businesses.map((b) => (b.id === editingBusinessId ? { ...b, name } : b)));
+    setEditingBusinessId(null);
+    setEditingBusinessName('');
+    addLog(`Renamed business to "${name}"`);
+  }, [businesses, editingBusinessId, editingBusinessName, saveBusiness]);
 
   const activeEmployees = useMemo(
     () => (selected ? selected.employees.filter((e) => e.address.trim()) : []),
@@ -692,14 +776,43 @@ function App() {
                   )}
                   <div className="business-list">
                     {businesses.map((b) => (
-                      <button
+                      <div
                         key={b.id}
                         className={`business-row${b.id === selectedId ? ' active' : ''}`}
-                        onClick={() => setSelectedId(b.id)}
                       >
-                        <span className="bname">{b.name}</span>
-                        <span className="bcount">{b.employees.length} emp</span>
-                      </button>
+                        {editingBusinessId === b.id ? (
+                          <div className="edit-inline">
+                            <input
+                              value={editingBusinessName}
+                              onChange={(e) => setEditingBusinessName(e.target.value)}
+                              autoFocus
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') saveEditBusiness();
+                                if (e.key === 'Escape') setEditingBusinessId(null);
+                              }}
+                            />
+                            <button className="icon-btn ok" onClick={saveEditBusiness}>✓</button>
+                            <button className="icon-btn" onClick={() => setEditingBusinessId(null)}>✕</button>
+                          </div>
+                        ) : (
+                          <>
+                            <button
+                              className="business-main"
+                              onClick={() => setSelectedId(b.id)}
+                            >
+                              <span className="bname">{b.name}</span>
+                              <span className="bcount">{b.employees.length} emp</span>
+                            </button>
+                            <button
+                              className="icon-btn edit"
+                              title="Rename business"
+                              onClick={() => startEditBusiness(b.id)}
+                            >
+                              ✎
+                            </button>
+                          </>
+                        )}
+                      </div>
                     ))}
                   </div>
                   <div className="row">
@@ -836,17 +949,81 @@ function App() {
                           <span>Role</span>
                           <span />
                         </div>
-                        {selected.employees.map((e) => (
-                          <div className="emp-row" key={e.id}>
-                            <span className="emp-name">{e.name}</span>
-                            <code className="emp-addr">{shortAddress(e.address, 8)}</code>
-                            <span>{e.salary || '—'}</span>
-                            <span>{e.role || '—'}</span>
-                            <button className="icon-btn danger" onClick={() => removeEmployee(e.id)}>
-                              ✕
-                            </button>
-                          </div>
-                        ))}
+                        {selected.employees.map((e) =>
+                          editingEmployeeId === e.id ? (
+                            <div className="emp-row edit-row" key={e.id}>
+                              <input
+                                className="emp-edit-name"
+                                value={editingEmployeeForm.name}
+                                onChange={(ev) =>
+                                  setEditingEmployeeForm({ ...editingEmployeeForm, name: ev.target.value })
+                                }
+                                placeholder="Name"
+                                autoFocus
+                              />
+                              <input
+                                className="emp-edit-addr"
+                                value={editingEmployeeForm.address}
+                                onChange={(ev) =>
+                                  setEditingEmployeeForm({ ...editingEmployeeForm, address: ev.target.value })
+                                }
+                                placeholder="Wallet (Aztec address)"
+                                spellCheck={false}
+                              />
+                              <input
+                                className="emp-edit-salary"
+                                value={editingEmployeeForm.salary}
+                                onChange={(ev) =>
+                                  setEditingEmployeeForm({ ...editingEmployeeForm, salary: ev.target.value })
+                                }
+                                placeholder="Salary (1200.00)"
+                              />
+                              <input
+                                className="emp-edit-role"
+                                value={editingEmployeeForm.role}
+                                onChange={(ev) =>
+                                  setEditingEmployeeForm({ ...editingEmployeeForm, role: ev.target.value })
+                                }
+                                placeholder="Role"
+                              />
+                              <span className="emp-actions">
+                                <button
+                                  className="icon-btn ok"
+                                  onClick={saveEditEmployee}
+                                  title="Save"
+                                >
+                                  ✓
+                                </button>
+                                <button
+                                  className="icon-btn"
+                                  onClick={() => setEditingEmployeeId(null)}
+                                  title="Cancel"
+                                >
+                                  ✕
+                                </button>
+                              </span>
+                            </div>
+                          ) : (
+                            <div className="emp-row" key={e.id}>
+                              <span className="emp-name">{e.name}</span>
+                              <code className="emp-addr">{shortAddress(e.address, 8)}</code>
+                              <span>{e.salary || '—'}</span>
+                              <span>{e.role || '—'}</span>
+                              <span className="emp-actions">
+                                <button
+                                  className="icon-btn edit"
+                                  title="Edit employee"
+                                  onClick={() => startEditEmployee(e.id)}
+                                >
+                                  ✎
+                                </button>
+                                <button className="icon-btn danger" onClick={() => removeEmployee(e.id)}>
+                                  ✕
+                                </button>
+                              </span>
+                            </div>
+                          ),
+                        )}
                       </div>
                       <div className="emp-form">
                         <input
