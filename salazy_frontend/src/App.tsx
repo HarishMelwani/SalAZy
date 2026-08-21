@@ -49,6 +49,13 @@ type Payroll = {
   fullyPaid: boolean;
 };
 
+type EpochRecord = {
+  epoch: number;
+  funded: bigint;
+  issued: bigint;
+  proved: boolean;
+};
+
 type LogLine = { time: string; text: string; err?: boolean };
 
 type TxRecord = {
@@ -113,6 +120,7 @@ function App() {
   });
   const [fundAmount, setFundAmount] = useState('');
   const [payroll, setPayroll] = useState<Payroll | null>(null);
+  const [epochHistory, setEpochHistory] = useState<EpochRecord[]>([]);
   const [paychecks, setPaychecks] = useState<SalaryNote[]>([]);
   const [balance, setBalance] = useState<bigint>(0n);
   const [busy, setBusy] = useState<string>('');
@@ -247,6 +255,26 @@ function App() {
     [employer],
   );
 
+  const refreshEpochHistory = useCallback(async () => {
+    if (!employer || !selected) return;
+    const company = encodeField(selected.name);
+    const records: EpochRecord[] = [];
+    const startEpoch = Math.max(1, selected.epoch - 20);
+    for (let e = selected.epoch; e >= startEpoch; e--) {
+      try {
+        const [funded, issued] = await Promise.all([
+          viewFunding(employer.contract, employer.address, company, BigInt(e)),
+          viewIssued(employer.contract, employer.address, company, BigInt(e)),
+        ]);
+        const proved = !!provedEpochs[`${selected.id}:${e}`];
+        records.push({ epoch: e, funded, issued, proved });
+      } catch {
+        records.push({ epoch: e, funded: 0n, issued: 0n, proved: false });
+      }
+    }
+    setEpochHistory(records);
+  }, [employer, selected, provedEpochs]);
+
   const refreshEmployee = useCallback(async () => {
     if (!employee) return;
     try {
@@ -269,7 +297,8 @@ function App() {
   useEffect(() => {
     if (!employer || !selected) return;
     refreshPayroll(selected);
-  }, [employer, selected, refreshPayroll]);
+    refreshEpochHistory();
+  }, [employer, selected, refreshPayroll, refreshEpochHistory]);
 
   useEffect(() => {
     if (!employee) return;
@@ -964,6 +993,51 @@ function App() {
                     </div>
                   </>
                 )}
+
+                <details className="card epoch-history" open={epochHistory.length > 0}>
+                  <summary>Period history ({epochHistory.length})</summary>
+                  {epochHistory.length === 0 ? (
+                    <p className="muted">No periods yet. Fund and run your first payroll.</p>
+                  ) : (
+                    <div className="epoch-list">
+                      {epochHistory.map((rec) => {
+                        const status = rec.issued === 0n && rec.funded === 0n
+                          ? 'not-started'
+                          : rec.proved
+                            ? 'proved'
+                            : rec.issued > 0n
+                              ? 'paid'
+                              : 'funded';
+                        const label =
+                          status === 'proved'
+                            ? 'Proved ✓'
+                            : status === 'paid'
+                              ? 'Paid'
+                              : status === 'funded'
+                                ? 'Funded'
+                                : 'Not started';
+                        return (
+                          <div className="epoch-row" key={rec.epoch}>
+                            <span className={`epoch-badge ${status}`}>
+                              {rec.epoch}
+                            </span>
+                            <span className="epoch-main">
+                              <span className="epoch-title">
+                                Period #{rec.epoch}
+                                {rec.epoch === selected?.epoch ? ' · current' : ''}
+                              </span>
+                              <span className="epoch-meta">
+                                issued {formatAmount(rec.issued)} · funded{' '}
+                                {formatAmount(rec.funded)}
+                              </span>
+                            </span>
+                            <span className={`epoch-status ${status}`}>{label}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </details>
               </div>
             </div>
           )}

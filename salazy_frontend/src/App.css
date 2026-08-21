@@ -843,6 +843,92 @@ code {
   color: var(--cyan);
 }
 
+.epoch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 18px 14px;
+}
+
+.epoch-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.epoch-badge {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+.epoch-badge.proved {
+  background: var(--magenta);
+  color: #0a0614;
+}
+
+.epoch-badge.paid {
+  background: var(--violet);
+  color: #0a0614;
+}
+
+.epoch-badge.funded {
+  background: var(--surface-2);
+  color: var(--cyan);
+}
+
+.epoch-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.epoch-title {
+  font-weight: 600;
+  color: var(--cream);
+}
+
+.epoch-meta {
+  color: var(--muted);
+  font-size: 11px;
+  font-family: var(--mono);
+}
+
+.epoch-status {
+  flex: none;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.epoch-status.proved {
+  color: var(--magenta);
+}
+
+.epoch-status.paid {
+  color: var(--violet);
+}
+
+.epoch-status.funded {
+  color: var(--cyan);
+}
+
+.epoch-status.not-started {
+  color: var(--muted);
+}
+
 .stats {
   display: grid;
   grid-template-columns: 1fr 1fr;
