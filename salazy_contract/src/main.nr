@@ -32,6 +32,12 @@ pub contract SalAZy {
     /// Maximum number of employees paid in a single private transaction.
     global MAX_EMPLOYEES_PER_PAYRUN: u32 = 8;
 
+    /// Balance views page over the employee's salary notes so a long work history
+    /// (many pay runs) never truncates the total. `MAX_BALANCE_PAGES` pages of
+    /// `MAX_NOTES_PER_PAGE` notes each.
+    global MAX_BALANCE_PAGES: u32 = 10;
+    global MAX_BALANCE_NOTES: u32 = MAX_BALANCE_PAGES * MAX_NOTES_PER_PAGE;
+
     /// A single salary instruction used by the batch `issue_salaries` function.
     #[derive(Deserialize, Serialize)]
     pub struct Employee {
@@ -292,23 +298,48 @@ pub contract SalAZy {
         funded == issued
     }
 
-    /// Employee's salary notes (only they can decrypt these).
+    /// Employee's salary notes (only they can decrypt these). Paginates across
+    /// pages so the full history is returned, not just the first page.
     #[external("utility")]
-    unconstrained fn view_balance_notes(owner: AztecAddress) -> BoundedVec<SalaryNote, MAX_NOTES_PER_PAGE> {
-        let options = NoteViewerOptions::<SalaryNote, <SalaryNote as Packable>::N>::new();
-        self.storage.balances.at(owner).view_notes(options)
+    unconstrained fn view_balance_notes(owner: AztecAddress) -> BoundedVec<SalaryNote, MAX_BALANCE_NOTES> {
+        let mut all = BoundedVec::new();
+        let mut offset = 0 as u32;
+        for page in 0..MAX_BALANCE_PAGES {
+            let mut options = NoteViewerOptions::<SalaryNote, <SalaryNote as Packable>::N>::new();
+            options.set_offset(offset);
+            let notes = self.storage.balances.at(owner).view_notes(options);
+            for i in 0..MAX_NOTES_PER_PAGE {
+                if i < notes.len() {
+                    all.push(notes.get_unchecked(i));
+                }
+            }
+            if notes.len() < MAX_NOTES_PER_PAGE {
+                break;
+            }
+            offset += MAX_NOTES_PER_PAGE as u32;
+        }
+        all
     }
 
-    /// Employee's balance (sum across all pay periods).
+    /// Employee's balance (sum across all pay periods). Paginates so no pay run
+    /// is ever missed after the first 10.
     #[external("utility")]
     unconstrained fn view_balance(owner: AztecAddress) -> Field {
-        let options = NoteViewerOptions::<SalaryNote, <SalaryNote as Packable>::N>::new();
-        let notes = self.storage.balances.at(owner).view_notes(options);
         let mut total = 0 as Field;
-        for i in 0..MAX_NOTES_PER_PAGE {
-            if i < notes.len() {
-                total += notes.get_unchecked(i).amount;
+        let mut offset = 0 as u32;
+        for page in 0..MAX_BALANCE_PAGES {
+            let mut options = NoteViewerOptions::<SalaryNote, <SalaryNote as Packable>::N>::new();
+            options.set_offset(offset);
+            let notes = self.storage.balances.at(owner).view_notes(options);
+            for i in 0..MAX_NOTES_PER_PAGE {
+                if i < notes.len() {
+                    total += notes.get_unchecked(i).amount;
+                }
             }
+            if notes.len() < MAX_NOTES_PER_PAGE {
+                break;
+            }
+            offset += MAX_NOTES_PER_PAGE as u32;
         }
         total
     }

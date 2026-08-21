@@ -23,6 +23,9 @@ import {
 import './App.css';
 
 const STORAGE_KEY = 'salazy.businesses.v1';
+const TX_HISTORY_KEY = 'salazy.txhistory.v1';
+const PROVED_KEY = 'salazy.proved.v1';
+const TX_HISTORY_MAX = 20;
 
 type EmployeeRow = {
   id: string;
@@ -47,6 +50,14 @@ type Payroll = {
 };
 
 type LogLine = { time: string; text: string; err?: boolean };
+
+type TxRecord = {
+  id: string;
+  action: 'fund' | 'pay' | 'prove';
+  label: string;
+  hash: string;
+  time: string;
+};
 
 function shortAddress(addr: string, n = 10) {
   return addr.length > n * 2 ? `${addr.slice(0, n)}…${addr.slice(-n)}` : addr;
@@ -110,6 +121,22 @@ function App() {
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const lastPaycheckCount = useRef<number | null>(null);
+  const [txHistory, setTxHistory] = useState<TxRecord[]>(() => {
+    try {
+      const raw = localStorage.getItem(TX_HISTORY_KEY);
+      return raw ? (JSON.parse(raw) as TxRecord[]) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [provedEpochs, setProvedEpochs] = useState<Record<string, boolean>>(() => {
+    try {
+      const raw = localStorage.getItem(PROVED_KEY);
+      return raw ? (JSON.parse(raw) as Record<string, boolean>) : {};
+    } catch {
+      return {};
+    }
+  });
 
   function addLog(text: string, err = false) {
     setLog((l) => [
@@ -124,6 +151,25 @@ function App() {
     toastTimer.current = setTimeout(() => setToast(''), 3500);
   }
 
+  function recordTx(action: TxRecord['action'], label: string, hash: string) {
+    const record: TxRecord = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      action,
+      label,
+      hash,
+      time: new Date().toLocaleString(),
+    };
+    setTxHistory((h) => {
+      const next = [record, ...h].slice(0, TX_HISTORY_MAX);
+      try {
+        localStorage.setItem(TX_HISTORY_KEY, JSON.stringify(next));
+      } catch {
+        // Storage full or unavailable; keep in-memory only.
+      }
+      return next;
+    });
+  }
+
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
   }, [log]);
@@ -133,6 +179,9 @@ function App() {
   }, [businesses]);
 
   const selected = businesses.find((b) => b.id === selectedId) ?? null;
+
+  const provedKey = selected ? `${selected.id}:${selected.epoch}` : '';
+  const isProved = provedKey ? !!provedEpochs[provedKey] : false;
 
   const saveBusiness = useCallback((next: Business[]) => {
     setBusinesses(next);
@@ -325,6 +374,7 @@ function App() {
       addLog(`Proving & funding epoch ${selected.epoch}…`);
       const txHash = await fund(employer.contract, employer.address, company, BigInt(selected.epoch), amount);
       addLog(`Funded ${formatAmount(amount)} for epoch ${selected.epoch} · tx ${shortAddress(txHash, 8)}`);
+      recordTx('fund', `Fund epoch ${selected.epoch}`, txHash);
       setFundAmount('');
       setTimeout(() => refreshPayroll(selected), 4000);
     } catch (err) {
@@ -388,6 +438,7 @@ function App() {
         );
         const txHash = await issueSalaries(employer.contract, employer.address, company, BigInt(selected.epoch), batch);
         hashes.push(txHash);
+        recordTx('pay', `Pay ${batch.length} (epoch ${selected.epoch}, batch ${b + 1})`, txHash);
       }
       addLog(
         `Paid ${rows.length} employee${rows.length === 1 ? '' : 's'} privately (epoch ${selected.epoch}) · tx ${hashes
@@ -396,6 +447,11 @@ function App() {
       );
       showToast(`Paid ${rows.length} employee${rows.length === 1 ? '' : 's'} ✓`);
       setPayroll(null);
+      setProvedEpochs((p) => {
+        const next = { ...p, [provedKey]: false };
+        try { localStorage.setItem(PROVED_KEY, JSON.stringify(next)); } catch {}
+        return next;
+      });
       setTimeout(() => refreshPayroll(selected), 4000);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -413,10 +469,16 @@ function App() {
     currentPayroll,
     salaryTotal,
     alreadyPaid,
+    provedKey,
   ]);
 
   const handleNextPeriod = useCallback(() => {
     if (!selected) return;
+    if (!isProved) {
+      setError('Prove this period fully paid before starting the next one');
+      addLog('Blocked: prove epoch ' + selected.epoch + ' before advancing', true);
+      return;
+    }
     const next = businesses.map((b) =>
       b.id === selected.id ? { ...b, epoch: b.epoch + 1 } : b,
     );
@@ -424,7 +486,7 @@ function App() {
     setPayroll(null);
     setFundAmount('');
     addLog(`Started period ${selected.epoch + 1}`);
-  }, [businesses, selected, saveBusiness]);
+  }, [businesses, selected, saveBusiness, isProved]);
 
   const handleProve = useCallback(async () => {
     if (!employer || !selected) return;
@@ -435,16 +497,27 @@ function App() {
       addLog(`Building ZK proof issued == funded…`);
       const txHash = await proveFullyPaid(employer.contract, employer.address, company, BigInt(selected.epoch), salaryTotal);
       addLog(`✓ PROVED fully paid for epoch ${selected.epoch} · tx ${shortAddress(txHash, 8)} — zero amounts revealed`);
+      recordTx('prove', `Prove fully paid · epoch ${selected.epoch}`, txHash);
       showToast('Proved fully paid ✓');
+      setProvedEpochs((p) => {
+        const next = { ...p, [provedKey]: true };
+        try { localStorage.setItem(PROVED_KEY, JSON.stringify(next)); } catch {}
+        return next;
+      });
       setTimeout(() => refreshPayroll(selected), 4000);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setError(msg);
       addLog(`Not paid: ${msg}`, true);
+      setProvedEpochs((p) => {
+        const next = { ...p, [provedKey]: false };
+        try { localStorage.setItem(PROVED_KEY, JSON.stringify(next)); } catch {}
+        return next;
+      });
     } finally {
       setBusy('');
     }
-  }, [employer, selected, refreshPayroll, salaryTotal]);
+  }, [employer, selected, refreshPayroll, salaryTotal, provedKey]);
 
   const copyText = useCallback(async (text: string, label: string) => {
     try {
@@ -593,6 +666,30 @@ function App() {
                   </div>
                 </div>
 
+                <details className="card tx-history">
+                  <summary>Transaction history ({txHistory.length})</summary>
+                  <div className="tx-list">
+                    {txHistory.length === 0 && (
+                      <p className="muted">No transactions yet. Fund, pay, or prove to see them here.</p>
+                    )}
+                    {txHistory.map((r) => (
+                      <div className="tx-row" key={r.id}>
+                        <span className={`tx-badge ${r.action}`}>
+                          {r.action === 'fund' ? 'F' : r.action === 'pay' ? 'P' : '✓'}
+                        </span>
+                        <span className="tx-label">{r.label}</span>
+                        <span
+                          className="tx-hash"
+                          title={`${r.hash} · ${r.time}`}
+                          onClick={() => copyText(r.hash, 'Tx hash')}
+                        >
+                          {shortAddress(r.hash, 8)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+
                 <details className="card log">
                   <summary>Session activity</summary>
                   <div className="log-inner" ref={logRef}>
@@ -717,9 +814,14 @@ function App() {
                         <button
                           className="btn small"
                           onClick={handleNextPeriod}
-                          disabled={busy !== ''}
+                          disabled={busy !== '' || !isProved}
+                          title={
+                            isProved
+                              ? 'Start the next pay period'
+                              : 'Prove this period fully paid first'
+                          }
                         >
-                          Next period ›
+                          {isProved ? 'Next period ›' : '🔒 Next period ›'}
                         </button>
                       </div>
                       <p className="muted">
@@ -801,11 +903,25 @@ function App() {
                         <button
                           className="btn outline"
                           onClick={handleProve}
-                          disabled={busy !== ''}
-                          title="Check this period: proves fully paid, or fails with 'not paid'"
+                          disabled={busy !== '' || isProved}
+                          title={
+                            isProved
+                              ? 'This period is proved fully paid ✓'
+                              : 'Check this period: proves fully paid, or fails with not paid'
+                          }
                         >
-                          {busy === 'prove' ? 'Proving…' : 'Prove fully paid'}
+                          {busy === 'prove'
+                            ? 'Proving…'
+                            : isProved
+                              ? 'Proved fully paid ✓'
+                              : 'Prove fully paid'}
                         </button>
+                        {isProved && (
+                          <div className="pay-note ok">
+                            <span className="pay-note-dot" />
+                            ZK proof passed ✓ — you can start the next period
+                          </div>
+                        )}
                       </div>
                     </div>
                   </>
