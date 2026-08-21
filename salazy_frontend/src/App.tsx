@@ -472,21 +472,42 @@ function App() {
     provedKey,
   ]);
 
-  const handleNextPeriod = useCallback(() => {
-    if (!selected) return;
+  const handleNextPeriod = useCallback(async () => {
+    if (!selected || !employer) return;
     if (!isProved) {
       setError('Prove this period fully paid before starting the next one');
       addLog('Blocked: prove epoch ' + selected.epoch + ' before advancing', true);
       return;
     }
-    const next = businesses.map((b) =>
-      b.id === selected.id ? { ...b, epoch: b.epoch + 1 } : b,
-    );
-    saveBusiness(next);
-    setPayroll(null);
-    setFundAmount('');
-    addLog(`Started period ${selected.epoch + 1}`);
-  }, [businesses, selected, saveBusiness, isProved]);
+    setBusy('next');
+    setError('');
+    try {
+      const company = encodeField(selected.name);
+      const leftover =
+        currentPayroll && currentPayroll.funded > currentPayroll.issued
+          ? currentPayroll.funded - currentPayroll.issued
+          : 0n;
+      if (leftover > 0n) {
+        addLog(`Carrying over ${formatAmount(leftover)} from epoch ${selected.epoch}…`);
+        const txHash = await fund(employer.contract, employer.address, company, BigInt(selected.epoch + 1), leftover);
+        addLog(`Carried over ${formatAmount(leftover)} · tx ${shortAddress(txHash, 8)}`);
+        recordTx('fund', `Carry over ${formatAmount(leftover)} to epoch ${selected.epoch + 1}`, txHash);
+      }
+      const next = businesses.map((b) =>
+        b.id === selected.id ? { ...b, epoch: b.epoch + 1 } : b,
+      );
+      saveBusiness(next);
+      setPayroll(null);
+      setFundAmount('');
+      addLog(`Started period ${selected.epoch + 1}` + (leftover > 0n ? ` · ${formatAmount(leftover)} carried over` : ''));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(`Advance failed: ${msg}`);
+      addLog(`Advance error: ${msg}`, true);
+    } finally {
+      setBusy('');
+    }
+  }, [businesses, selected, saveBusiness, isProved, employer, currentPayroll]);
 
   const handleProve = useCallback(async () => {
     if (!employer || !selected) return;
@@ -821,7 +842,11 @@ function App() {
                               : 'Prove this period fully paid first'
                           }
                         >
-                          {isProved ? 'Next period ›' : '🔒 Next period ›'}
+                          {isProved
+                            ? busy === 'next'
+                              ? 'Advancing…'
+                              : 'Next period ›'
+                            : '🔒 Next period ›'}
                         </button>
                       </div>
                       <p className="muted">
