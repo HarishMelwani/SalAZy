@@ -629,6 +629,17 @@ function App() {
         addLog('Not paid: nothing issued for this period', true);
         return;
       }
+      if (fundedNow < issuedNow) {
+        const shortfall = issuedNow - fundedNow;
+        setError(
+          `This period is under-funded: ${formatAmount(fundedNow)} funded but ${formatAmount(issuedNow)} issued. Fund ${formatAmount(shortfall)} more first`,
+        );
+        addLog(
+          `Not paid: funded ${formatAmount(fundedNow)} < issued ${formatAmount(issuedNow)} — fund ${formatAmount(shortfall)} more`,
+          true,
+        );
+        return;
+      }
       addLog(`Building ZK proof issued == funded…`);
       const txHash = await proveFullyPaid(employer.contract, employer.address, company, BigInt(selected.epoch), issuedNow);
       addLog(`✓ PROVED fully paid for epoch ${selected.epoch} · tx ${shortAddress(txHash, 8)} — zero amounts revealed`);
