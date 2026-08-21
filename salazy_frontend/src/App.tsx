@@ -337,16 +337,17 @@ function App() {
     [businesses, selected, saveBusiness],
   );
 
-  const salaryTotal = selected
-    ? selected.employees.reduce(
-        (sum, e) => sum + (parseAmount(e.salary) ?? 0n),
-        0n,
-      )
-    : 0n;
-
   const activeEmployees = useMemo(
     () => (selected ? selected.employees.filter((e) => e.address.trim()) : []),
     [selected],
+  );
+
+  // Planned total must match what issue_salaries actually pays: employees with
+  // a non-empty address. Counting address-less rows inflates the total, so the
+  // ZK proof fails with "issued != planned total".
+  const salaryTotal = activeEmployees.reduce(
+    (sum, e) => sum + (parseAmount(e.salary) ?? 0n),
+    0n,
   );
   const currentPayroll =
     payroll && selected && payroll.epoch === String(selected.epoch) ? payroll : null;
