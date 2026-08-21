@@ -4,8 +4,8 @@ use aztec::test::helpers::test_environment::TestEnvironment;
 use salazy_contract::SalAZy;
 
 // Minimal helper to make a padded employee array for batch issue.
-fn employee_array(entries: [(AztecAddress, Field, Field); 3]) -> [SalAZy::Employee; 15] {
-    let mut employees = [SalAZy::Employee { address: AztecAddress::zero(), amount: 0, role: 0 }; 15];
+fn employee_array(entries: [(AztecAddress, Field, Field); 3]) -> [SalAZy::Employee; 14] {
+    let mut employees = [SalAZy::Employee { address: AztecAddress::zero(), amount: 0, role: 0 }; 14];
     for i in 0..entries.len() {
         employees[i] = SalAZy::Employee { address: entries[i].0, amount: entries[i].1, role: entries[i].2 };
     }
