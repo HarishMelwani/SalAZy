@@ -7,7 +7,7 @@ import { SalAZyContract, SalAZyContractArtifact } from './generated/SalAZy';
 import { createSponsoredFeePayment } from './fees';
 import { getNodeUrl, SALAZY_CONTRACT_ADDRESS } from './config';
 
-export const MAX_EMPLOYEES_PER_PAYRUN = 14;
+export const MAX_EMPLOYEES_PER_PAYRUN = 7;
 
 export interface EmployeeInput {
   address: AztecAddress;

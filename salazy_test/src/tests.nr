@@ -4,8 +4,8 @@ use aztec::test::helpers::test_environment::TestEnvironment;
 use salazy_contract::SalAZy;
 
 // Minimal helper to make a padded employee array for batch issue.
-fn employee_array(entries: [(AztecAddress, Field, Field); 3]) -> [SalAZy::Employee; 14] {
-    let mut employees = [SalAZy::Employee { address: AztecAddress::zero(), amount: 0, role: 0 }; 14];
+fn employee_array(entries: [(AztecAddress, Field, Field); 3]) -> [SalAZy::Employee; 7] {
+    let mut employees = [SalAZy::Employee { address: AztecAddress::zero(), amount: 0, role: 0 }; 7];
     for i in 0..entries.len() {
         employees[i] = SalAZy::Employee { address: entries[i].0, amount: entries[i].1, role: entries[i].2 };
     }
@@ -216,20 +216,20 @@ unconstrained fn prove_fully_paid_survives_many_notes_across_repeated_funding_an
     env.call_private(alice, SalAZy::at(contract_address).fund(1, 4, 300));
     env.call_private(alice, SalAZy::at(contract_address).fund(1, 4, 400));
 
-    // Batch 1: 8 employees (max per tx), total 600.
+    // Batch 1: 7 employees (max per tx), total 550.
     let mut batch1 = employee_array([(bob, 100, 1), (carol, 100, 1), (dave, 50, 1)]);
     batch1[3] = SalAZy::Employee { address: erin, amount: 100, role: 1 };
     batch1[4] = SalAZy::Employee { address: frank, amount: 50, role: 1 };
     batch1[5] = SalAZy::Employee { address: grace, amount: 100, role: 2 };
     batch1[6] = SalAZy::Employee { address: henry, amount: 50, role: 2 };
-    batch1[7] = SalAZy::Employee { address: iris, amount: 50, role: 2 };
     env.call_private(alice, SalAZy::at(contract_address).issue_salaries(1, 4, batch1));
 
-    // Batch 2: remaining 3 employees, total 300.
-    let batch2 = employee_array([(joe, 100, 1), (kay, 200, 2), (AztecAddress::zero(), 0, 0)]);
+    // Batch 2: remaining 4 employees, total 350.
+    let mut batch2 = employee_array([(iris, 50, 2), (joe, 100, 1), (kay, 200, 2)]);
+    batch2[3] = SalAZy::Employee { address: AztecAddress::zero(), amount: 0, role: 0 };
     env.call_private(alice, SalAZy::at(contract_address).issue_salaries(1, 4, batch2));
 
-    // Planned total is 900 (600 + 300). The proof must land even though the
-    // combined ledger would previously have held 15 notes.
+    // Planned total is 900 (550 + 350). The proof must land even though the
+    // combined ledger would previously have held many notes.
     env.call_private(alice, SalAZy::at(contract_address).prove_fully_paid(1, 4, 900));
 }

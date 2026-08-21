@@ -29,13 +29,13 @@ pub contract SalAZy {
     use aztec::protocol::constants::MAX_NOTE_HASH_READ_REQUESTS_PER_CALL;
     use aztec::utils::comparison::{Comparator, compare};
 
-    /// Maximum number of employees paid in a single private transaction. The
-    /// hard protocol limit is MAX_NOTE_HASHES_PER_CALL (16) note hashes per call
-    /// frame: each employee's SalaryNote is one note hash, and the aggregated
-    /// issuance note adds one more — all in the same frame because internal
-    /// calls are inlined. So N + 1 <= 16 gives 15. 14 leaves headroom for the
-    /// handshake-registry note the delivery path can add for a fresh recipient.
-    global MAX_EMPLOYEES_PER_PAYRUN: u32 = 14;
+    /// Maximum number of employees paid in a single private transaction. Bound
+    /// by MAX_PRIVATE_CALL_STACK_LENGTH_PER_CALL (8): the issue_salaries frame
+    /// counts as one private call, and each salary to a fresh recipient triggers
+    /// a nested non-interactive handshake call to the HandshakeRegistry. So the
+    /// safe batch is 7 employees when every recipient is new. (Note-hash and
+    /// private-log budgets also cap at 16, but the call-stack limit binds first.)
+    global MAX_EMPLOYEES_PER_PAYRUN: u32 = 7;
 
     /// Balance views page over the employee's salary notes so a long work history
     /// (many pay runs) never truncates the total. `MAX_BALANCE_PAGES` pages of
