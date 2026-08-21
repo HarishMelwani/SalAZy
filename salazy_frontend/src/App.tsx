@@ -387,8 +387,13 @@ function App() {
   const fundedOk =
     currentPayroll !== null && salaryTotal > 0n && currentPayroll.funded >= salaryTotal;
   const canPay = activeEmployees.length > 0 && fundedOk;
+  // The period is "fully paid out" when the funding pool is exhausted
+  // (issued == funded). Gating on salaryTotal instead would lock out further
+  // payments while remaining funding still exists.
   const alreadyPaid =
-    currentPayroll !== null && salaryTotal > 0n && currentPayroll.issued >= salaryTotal;
+    currentPayroll !== null &&
+    currentPayroll.funded > 0n &&
+    currentPayroll.issued >= currentPayroll.funded;
 
   const handleFund = useCallback(async () => {
     if (!employer || !selected) return;
