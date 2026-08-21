@@ -25,6 +25,7 @@ import './App.css';
 const STORAGE_KEY = 'salazy.businesses.v1';
 const TX_HISTORY_KEY = 'salazy.txhistory.v1';
 const PROVED_KEY = 'salazy.proved.v1';
+const PLANNED_KEY = 'salazy.planned.v1';
 const TX_HISTORY_MAX = 20;
 
 type EmployeeRow = {
@@ -137,6 +138,14 @@ function App() {
       return {};
     }
   });
+  const [plannedTotals, setPlannedTotals] = useState<Record<string, string>>(() => {
+    try {
+      const raw = localStorage.getItem(PLANNED_KEY);
+      return raw ? (JSON.parse(raw) as Record<string, string>) : {};
+    } catch {
+      return {};
+    }
+  });
 
   function addLog(text: string, err = false) {
     setLog((l) => [
@@ -165,6 +174,18 @@ function App() {
         localStorage.setItem(TX_HISTORY_KEY, JSON.stringify(next));
       } catch {
         // Storage full or unavailable; keep in-memory only.
+      }
+      return next;
+    });
+  }
+
+  function setPlannedTotal(key: string, total: bigint) {
+    setPlannedTotals((p) => {
+      const next = { ...p, [key]: total.toString() };
+      try {
+        localStorage.setItem(PLANNED_KEY, JSON.stringify(next));
+      } catch {
+        // Ignore storage failures.
       }
       return next;
     });
@@ -448,6 +469,7 @@ function App() {
       );
       showToast(`Paid ${rows.length} employee${rows.length === 1 ? '' : 's'} ✓`);
       setPayroll(null);
+      setPlannedTotal(provedKey, salaryTotal);
       setProvedEpochs((p) => {
         const next = { ...p, [provedKey]: false };
         try { localStorage.setItem(PROVED_KEY, JSON.stringify(next)); } catch {}
@@ -516,8 +538,25 @@ function App() {
     setError('');
     try {
       const company = encodeField(selected.name);
-      addLog(`Building ZK proof issued == funded…`);
-      const txHash = await proveFullyPaid(employer.contract, employer.address, company, BigInt(selected.epoch), salaryTotal);
+      const planned = plannedTotals[provedKey] ? BigInt(plannedTotals[provedKey]) : salaryTotal;
+      if (planned !== salaryTotal) {
+        addLog(`Using planned total ${formatAmount(planned)} (pay-time) — list now says ${formatAmount(salaryTotal)}`, true);
+      }
+      const [issuedNow, fundedNow] = await Promise.all([
+        viewIssued(employer.contract, employer.address, company, BigInt(selected.epoch)).catch(() => 0n),
+        viewFunding(employer.contract, employer.address, company, BigInt(selected.epoch)).catch(() => 0n),
+      ]);
+      addLog(
+        `On-chain epoch ${selected.epoch}: issued ${formatAmount(issuedNow)} · funded ${formatAmount(fundedNow)} · planned ${formatAmount(planned)}`,
+      );
+      if (issuedNow !== planned) {
+        addLog(
+          `Planned total (${formatAmount(planned)}) doesn't match on-chain issued (${formatAmount(issuedNow)}) — re-pay with current employees or check for empty-address rows`,
+          true,
+        );
+      }
+      addLog(`Building ZK proof issued == planned…`);
+      const txHash = await proveFullyPaid(employer.contract, employer.address, company, BigInt(selected.epoch), planned);
       addLog(`✓ PROVED fully paid for epoch ${selected.epoch} · tx ${shortAddress(txHash, 8)} — zero amounts revealed`);
       recordTx('prove', `Prove fully paid · epoch ${selected.epoch}`, txHash);
       showToast('Proved fully paid ✓');
@@ -539,7 +578,7 @@ function App() {
     } finally {
       setBusy('');
     }
-  }, [employer, selected, refreshPayroll, salaryTotal, provedKey]);
+  }, [employer, selected, refreshPayroll, salaryTotal, provedKey, plannedTotals]);
 
   const copyText = useCallback(async (text: string, label: string) => {
     try {
