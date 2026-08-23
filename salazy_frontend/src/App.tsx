@@ -705,25 +705,67 @@ function App() {
     paidEmployees,
   ]);
 
-  const handleNextPeriod = useCallback(() => {
-    if (!selected) return;
+  const handleNextPeriod = useCallback(async () => {
+    if (!selected || !employer) return;
     if (!isProved) {
       setError('Prove this period fully paid before starting the next one');
       addLog('Blocked: prove epoch ' + selected.epoch + ' before advancing', true);
       return;
     }
-    // Funding is per-period and manual: leftover from this epoch stays in this
-    // epoch's ledger. The next period starts unfunded; the employer tops it up
-    // with the Fund box. (Previously we auto-carried the leftover, but a stale
-    // payroll view made it carry the wrong amount.)
-    const next = businesses.map((b) =>
-      b.id === selected.id ? { ...b, epoch: b.epoch + 1 } : b,
-    );
-    saveBusiness(next);
-    setPayroll(null);
-    setFundAmount('');
-    addLog(`Started period ${selected.epoch + 1}`);
-  }, [businesses, selected, saveBusiness, isProved]);
+    setBusy('next');
+    setError('');
+    try {
+      const company = fieldFromString(selected.companyId);
+      // Always roll over from FRESH on-chain numbers — the cached payroll view
+      // can be stale, which is exactly what broke auto-carry last time.
+      const [funded, issued] = await Promise.all([
+        viewFunding(employer.contract, employer.address, company, BigInt(selected.epoch)),
+        viewIssued(employer.contract, employer.address, company, BigInt(selected.epoch)),
+      ]);
+      const leftover = funded > issued ? funded - issued : 0n;
+      if (leftover > 0n) {
+        addLog(
+          `Rolling over ${formatAmount(leftover)} leftover funding to epoch ${selected.epoch + 1}…`,
+        );
+        const txHash = await fund(
+          employer.contract,
+          employer.address,
+          company,
+          BigInt(selected.epoch + 1),
+          leftover,
+        );
+        recordTx('fund', `Rollover to epoch ${selected.epoch + 1}`, txHash);
+        addLog(`Rolled over ${formatAmount(leftover)} · tx ${shortAddress(txHash, 8)}`);
+      }
+      const next = businesses.map((b) =>
+        b.id === selected.id ? { ...b, epoch: b.epoch + 1 } : b,
+      );
+      saveBusiness(next);
+      setPayroll(null);
+      setFundAmount('');
+      showToast(
+        leftover > 0n
+          ? `Period ${selected.epoch + 1} started · ${formatAmount(leftover)} rolled over`
+          : `Started period ${selected.epoch + 1}`,
+      );
+      addLog(
+        `Started period ${selected.epoch + 1}${leftover > 0n ? ` with ${formatAmount(leftover)} rolled over` : ''}`,
+      );
+      // Re-read the new period after the rollover tx settles so the Funded
+      // chip shows it (the epoch-change effect already refreshes once).
+      setTimeout(() => {
+        refreshPayroll({ ...selected, epoch: selected.epoch + 1 });
+      }, 4000);
+    } catch (err) {
+      // The epoch does NOT advance unless everything landed: a failed rollover
+      // is simply retryable by clicking Next period again.
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(`Next period failed: ${msg}`);
+      addLog(`Next period error: ${msg}`, true);
+    } finally {
+      setBusy('');
+    }
+  }, [businesses, selected, saveBusiness, isProved, employer, refreshPayroll]);
 
   const handleProve = useCallback(async () => {
     if (!employer || !selected) return;
@@ -1045,7 +1087,10 @@ function App() {
                             <div className="chip warn-chip">Partial</div>
                           )}
                           {payroll.funded > payroll.issued && (
-                            <div className="chip remain-chip">
+                            <div
+                              className="chip remain-chip"
+                              title="Rolls over to the next period when you start it"
+                            >
                               <span className="chip-lbl">Remaining</span>
                               <span className="chip-val">
                                 {formatAmount(payroll.funded - payroll.issued)}
@@ -1185,16 +1230,21 @@ function App() {
                           disabled={busy !== '' || !isProved}
                           title={
                             isProved
-                              ? 'Start the next pay period'
+                              ? 'Start the next pay period — leftover funding rolls over'
                               : 'Prove this period fully paid first'
                           }
                         >
-                          {isProved ? 'Next period ›' : '🔒 Next period ›'}
+                          {busy === 'next'
+                            ? 'Rolling over…'
+                            : isProved
+                              ? 'Next period ›'
+                              : '🔒 Next period ›'}
                         </button>
                       </div>
                       <p className="muted">
                         Fund the period, then pay everyone with one click. Each
                         salary is a private encrypted note; amounts stay hidden.
+                        Leftover funding rolls into the next period.
                       </p>
                       <div className="payroll-actions">
                         <div className="row grow">
