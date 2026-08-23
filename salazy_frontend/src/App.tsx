@@ -32,7 +32,6 @@ const PAID_KEY = 'salazy.paid.v1';
 const PLANNED_KEY = 'salazy.planned.v1';
 const ROLLOVER_KEY = 'salazy.rollover.v1';
 const TOPUPS_KEY = 'salazy.topups.v1';
-const ROLLOVER_PENDING_KEY = 'salazy.rolloverPending.v1';
 const TX_HISTORY_MAX = 20;
 
 type EmployeeRow = {
@@ -328,28 +327,6 @@ function App() {
       persistJson(TOPUPS_KEY, next);
       return next;
     });
-  }
-
-  /**
-   * Marks that a rollover tx is being sent FROM this period (value = amount).
-   * A pending mark without success means "already sent, don't send again" —
-   * it prevents a retry from double-funding the next period.
-   */
-  function markRolloverPending(key: string, amount: bigint) {
-    const map = loadJson<Record<string, string>>(ROLLOVER_PENDING_KEY, {});
-    map[key] = amount.toString();
-    persistJson(ROLLOVER_PENDING_KEY, map);
-  }
-
-  function rolloverPendingAmount(key: string): bigint | null {
-    const map = loadJson<Record<string, string>>(ROLLOVER_PENDING_KEY, {});
-    return map[key] !== undefined ? BigInt(map[key]) : null;
-  }
-
-  function clearRolloverPending(key: string) {
-    const map = loadJson<Record<string, string>>(ROLLOVER_PENDING_KEY, {});
-    delete map[key];
-    persistJson(ROLLOVER_PENDING_KEY, map);
   }
 
   useEffect(() => {
@@ -667,10 +644,22 @@ function App() {
     const parts: string[] = [];
     const rolled = BigInt(rollovers[periodKey] ?? '0');
     const topped = BigInt(topups[periodKey] ?? '0');
-    if (rolled > 0n) parts.push(`${formatAmount(rolled)} rolled over`);
+    if (rolled > 0n) parts.push(`${formatAmount(rolled)} carried over`);
     if (topped > 0n) parts.push(`${formatAmount(topped)} funded here`);
     return parts;
   }, [currentPayroll, rollovers, topups, periodKey]);
+
+  // Show the carry-over offer until the leftover has actually been moved.
+  // Unspent funding from the previous period, offered to carry into this one.
+  const prevEpochLeftover = useMemo(() => {
+    if (!selected || selected.epoch <= 1) return 0n;
+    const rec = epochHistory.find((r) => r.epoch === selected.epoch - 1);
+    if (!rec || rec.funded <= rec.issued) return 0n;
+    return rec.funded - rec.issued;
+  }, [selected, epochHistory]);
+
+  const showCarryOver =
+    prevEpochLeftover > 0n && BigInt(rollovers[periodKey] ?? '0') === 0n;
 
   const handleFund = useCallback(async () => {
     if (!employer || !selected) return;
@@ -819,90 +808,57 @@ function App() {
     paidEmployees,
   ]);
 
-  const handleNextPeriod = useCallback(async () => {
-    if (!selected || !employer) return;
+  const handleNextPeriod = useCallback(() => {
+    if (!selected) return;
     if (!isProved) {
       setError('Prove this period fully paid before starting the next one');
       addLog('Blocked: prove epoch ' + selected.epoch + ' before advancing', true);
       return;
     }
-    setBusy('next');
+    // Advancing NEVER transacts (user choice). The new period starts empty;
+    // any unspent funding from this period is surfaced as a notice with an
+    // explicit "move it here" button in the new period.
+    const next = businesses.map((b) =>
+      b.id === selected.id ? { ...b, epoch: b.epoch + 1 } : b,
+    );
+    saveBusiness(next);
+    setPayroll(null);
+    setFundAmount('');
+    showToast(`Started period ${selected.epoch + 1}`);
+    addLog(`Started period ${selected.epoch + 1}`);
+  }, [businesses, selected, saveBusiness, isProved]);
+
+  /** Explicitly moves the previous period's unspent funding into this one. */
+  const handleCarryOver = useCallback(async () => {
+    if (!employer || !selected || prevEpochLeftover === 0n) return;
+    setBusy('carry');
     setError('');
     try {
       const company = fieldFromString(selected.companyId);
-      // Always roll over from FRESH on-chain numbers — the cached payroll view
-      // can be stale, which is exactly what broke auto-carry last time.
-      const [funded, issued] = await Promise.all([
-        viewFunding(employer.contract, employer.address, company, BigInt(selected.epoch)),
-        viewIssued(employer.contract, employer.address, company, BigInt(selected.epoch)),
-      ]);
-      const leftover = funded > issued ? funded - issued : 0n;
-      const targetKey = `${selected.id}:${selected.epoch + 1}`;
-      let rolledAmount = 0n;
-      if (leftover > 0n || rolloverPendingAmount(periodKey) !== null) {
-        const pending = rolloverPendingAmount(periodKey);
-        if (pending !== null) {
-          // A previous attempt already sent this rollover tx. Reuse it —
-          // sending again would inflate the new period's pool.
-          rolledAmount = pending;
-          addLog(
-            `Rollover of ${formatAmount(pending)} was already sent earlier — not sending a duplicate`,
-          );
-        } else {
-          rolledAmount = leftover;
-          markRolloverPending(periodKey, rolledAmount);
-          addLog(
-            `Rolling over ${formatAmount(rolledAmount)} leftover funding to epoch ${selected.epoch + 1}…`,
-          );
-          try {
-            const txHash = await fund(
-              employer.contract,
-              employer.address,
-              company,
-              BigInt(selected.epoch + 1),
-              rolledAmount,
-            );
-            recordTx('fund', `Rollover to epoch ${selected.epoch + 1}`, txHash);
-            addLog(`Rolled over ${formatAmount(rolledAmount)} · tx ${shortAddress(txHash, 8)}`);
-          } catch (err) {
-            // The send failed, so treat it as not landed and allow a clean retry.
-            clearRolloverPending(periodKey);
-            throw err;
-          }
-        }
-        recordRollover(targetKey, rolledAmount);
-      }
-      const next = businesses.map((b) =>
-        b.id === selected.id ? { ...b, epoch: b.epoch + 1 } : b,
-      );
-      saveBusiness(next);
-      // Rollover fully done (tx + advance): the guard can stand down.
-      clearRolloverPending(periodKey);
-      setPayroll(null);
-      setFundAmount('');
-      showToast(
-        leftover > 0n
-          ? `Period ${selected.epoch + 1} started · ${formatAmount(leftover)} rolled over`
-          : `Started period ${selected.epoch + 1}`,
-      );
       addLog(
-        `Started period ${selected.epoch + 1}${leftover > 0n ? ` with ${formatAmount(leftover)} rolled over` : ''}`,
+        `Moving ${formatAmount(prevEpochLeftover)} from period ${selected.epoch - 1}…`,
       );
-      // Re-read the new period after the rollover tx settles so the Funded
-      // chip shows it (the epoch-change effect already refreshes once).
-      setTimeout(() => {
-        refreshPayroll({ ...selected, epoch: selected.epoch + 1 });
-      }, 4000);
+      const txHash = await fund(
+        employer.contract,
+        employer.address,
+        company,
+        BigInt(selected.epoch),
+        prevEpochLeftover,
+      );
+      recordTx('fund', `Carry over from period ${selected.epoch - 1}`, txHash);
+      recordRollover(periodKey, prevEpochLeftover);
+      addLog(`Moved ${formatAmount(prevEpochLeftover)} · tx ${shortAddress(txHash, 8)}`);
+      showToast(`${formatAmount(prevEpochLeftover)} moved into period ${selected.epoch}`);
+      setTimeout(() => refreshPayroll(selected), 4000);
     } catch (err) {
-      // The epoch does NOT advance unless everything landed: a failed rollover
-      // is simply retryable by clicking Next period again.
+      if (isChunkLoadError(err) && recoverFromChunkLoadError()) return;
       const msg = err instanceof Error ? err.message : String(err);
-      setError(`Next period failed: ${msg}`);
-      addLog(`Next period error: ${msg}`, true);
+      setError(`Carry over failed: ${msg}`);
+      addLog(`Carry over error: ${msg}`, true);
     } finally {
       setBusy('');
     }
-  }, [businesses, selected, saveBusiness, isProved, employer, refreshPayroll, periodKey]);
+  }, [employer, selected, prevEpochLeftover, refreshPayroll, periodKey]);
 
   const handleProve = useCallback(async () => {
     if (!employer || !selected) return;
@@ -1259,7 +1215,7 @@ function App() {
                           {payroll.funded > payroll.issued && (
                             <div
                               className="chip remain-chip"
-                              title="Rolls over to the next period when you start it"
+                              title="Offered to you when you start the next period"
                             >
                               <span className="chip-lbl">Remaining</span>
                               <span className="chip-val">
@@ -1403,22 +1359,37 @@ function App() {
                           disabled={busy !== '' || !isProved}
                           title={
                             isProved
-                              ? 'Start the next pay period — leftover funding rolls over'
+                              ? 'Start the next pay period'
                               : 'Prove this period fully paid first'
                           }
                         >
-                          {busy === 'next'
-                            ? 'Rolling over…'
-                            : isProved
-                              ? 'Next period ›'
-                              : '🔒 Next period ›'}
+                          {isProved ? 'Next period ›' : '🔒 Next period ›'}
                         </button>
                       </div>
                       <p className="muted">
                         Fund the period, then pay everyone with one click. Each
                         salary is a private encrypted note; amounts stay hidden.
-                        Leftover funding rolls into the next period.
+                        Unspent funding waits for you in the next period.
                       </p>
+                      {showCarryOver && (
+                        <div className="pay-note carry">
+                          <span className="pay-note-dot" />
+                          <span>
+                            Period {selected.epoch - 1} ended with{' '}
+                            {formatAmount(prevEpochLeftover)} unspent
+                          </span>
+                          <button
+                            className="btn small"
+                            disabled={busy !== ''}
+                            onClick={handleCarryOver}
+                            title="Move it into this period as funding"
+                          >
+                            {busy === 'carry'
+                              ? 'Moving…'
+                              : `Move ${formatAmount(prevEpochLeftover)} here`}
+                          </button>
+                        </div>
+                      )}
                       <div className="payroll-actions">
                         <div className="row grow">
                           <input
