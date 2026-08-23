@@ -9,6 +9,30 @@ import { getNodeUrl, SALAZY_CONTRACT_ADDRESS } from './config';
 
 export const MAX_EMPLOYEES_PER_PAYRUN = 7;
 
+/**
+ * A fresh company id: a random Field as a decimal string. 31 bytes = 248 bits,
+ * always inside the field, and effectively collision-free. Businesses keep this
+ * id for life, so renaming a business never orphans its payroll history.
+ */
+export function randomCompanyId(): string {
+  const bytes = new Uint8Array(31);
+  crypto.getRandomValues(bytes);
+  let n = 0n;
+  for (const b of bytes) n = (n << 8n) | BigInt(b);
+  if (n === 0n) n = 1n;
+  return n.toString();
+}
+
+/** Parses a stored decimal string (company id, planned total) back into a Field. */
+export function fieldFromString(value: string): Fr {
+  return new Fr(BigInt(value));
+}
+
+/** True when the UTF-8 text fits one packed field (31 bytes). */
+export function textFitsField(text: string, max = 31): boolean {
+  return new TextEncoder().encode(text).length <= max;
+}
+
 export interface EmployeeInput {
   address: AztecAddress;
   amount: bigint;
@@ -17,6 +41,8 @@ export interface EmployeeInput {
 
 export interface SalaryNote {
   company: string;
+  /** Raw company Field as a decimal string, for matching against business ids. */
+  companyRaw: string;
   epoch: string;
   amount: bigint;
   role: string;
@@ -170,6 +196,7 @@ export async function viewBalanceNotes(
   if (!result || !result.storage) return [];
   return result.storage.slice(0, Number(result.len)).map((n) => ({
     company: decodeField(n.company),
+    companyRaw: n.company.toString(),
     epoch: BigInt(n.epoch.toString()).toString(),
     amount: BigInt(n.amount.toString()),
     role: decodeField(n.role),

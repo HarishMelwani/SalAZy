@@ -8,11 +8,13 @@ import { createWallet, createSessionAccount } from './wallet';
 import {
   attachToSalAZy,
   encodeField,
+  fieldFromString,
   fund,
   isFullyPaid,
   issueSalaries,
   MAX_EMPLOYEES_PER_PAYRUN,
   proveFullyPaid,
+  randomCompanyId,
   viewBalance,
   viewBalanceNotes,
   viewFunding,
@@ -38,6 +40,8 @@ type EmployeeRow = {
 type Business = {
   id: string;
   name: string;
+  /** Stable on-chain company Field (decimal string). Never changes, even on rename. */
+  companyId: string;
   epoch: number;
   employees: EmployeeRow[];
 };
@@ -82,13 +86,30 @@ function formatAmount(n: bigint): string {
   return `${s.slice(0, -2)}.${s.slice(-2)}`;
 }
 
-function loadBusinesses(): Business[] {
+function loadJson<T>(key: string, fallback: T): T {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as Business[]) : [];
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
   } catch {
-    return [];
+    return fallback;
   }
+}
+
+function loadBusinesses(): Business[] {
+  const list = loadJson<Business[]>(STORAGE_KEY, []);
+  // Migrate: businesses created before stable company ids kept their ledger
+  // under the field derived from their name — keep that exact id so existing
+  // on-chain notes still match.
+  return list.map((b) => ({
+    ...b,
+    companyId: b.companyId ?? encodeField(b.name).toString(),
+  }));
+}
+
+/** Resolves a paycheck's company Field to the business name it belongs to. */
+function companyNameFor(businesses: Business[], note: SalaryNote): string {
+  const match = businesses.find((b) => b.companyId === note.companyRaw);
+  return match?.name ?? (note.company || '—');
 }
 
 function App() {
@@ -250,7 +271,7 @@ function App() {
   const refreshPayroll = useCallback(
     async (b: Business) => {
       if (!employer) return;
-      const company = encodeField(b.name);
+      const company = fieldFromString(b.companyId);
       try {
         const funded = await viewFunding(employer.contract, employer.address, company, BigInt(b.epoch));
         const issued = await viewIssued(employer.contract, employer.address, company, BigInt(b.epoch));
@@ -266,7 +287,7 @@ function App() {
 
   const refreshEpochHistory = useCallback(async () => {
     if (!employer || !selected) return;
-    const company = encodeField(selected.name);
+    const company = fieldFromString(selected.companyId);
     const records: EpochRecord[] = [];
     const startEpoch = Math.max(1, selected.epoch - 20);
     for (let e = selected.epoch; e >= startEpoch; e--) {
@@ -320,7 +341,7 @@ function App() {
     const name = newBusinessName.trim();
     if (!name) return;
     const id = crypto.randomUUID();
-    const next = [...businesses, { id, name, epoch: 1, employees: [] }];
+    const next = [...businesses, { id, name, companyId: randomCompanyId(), epoch: 1, employees: [] }];
     saveBusiness(next);
     setSelectedId(id);
     setNewBusinessName('');
@@ -489,7 +510,7 @@ function App() {
     setBusy('fund');
     setError('');
     try {
-      const company = encodeField(selected.name);
+      const company = fieldFromString(selected.companyId);
       addLog(`Proving & funding epoch ${selected.epoch}…`);
       const txHash = await fund(employer.contract, employer.address, company, BigInt(selected.epoch), amount);
       addLog(`Funded ${formatAmount(amount)} for epoch ${selected.epoch} · tx ${shortAddress(txHash, 8)}`);
@@ -539,7 +560,7 @@ function App() {
     setBusy('pay');
     setError('');
     try {
-      const company = encodeField(selected.name);
+      const company = fieldFromString(selected.companyId);
       const employees = rows.map((e) => ({
         address: AztecAddress.fromStringUnsafe(e.address.trim()),
         amount: parseAmount(e.salary)!,
@@ -616,7 +637,7 @@ function App() {
     setBusy('prove');
     setError('');
     try {
-      const company = encodeField(selected.name);
+      const company = fieldFromString(selected.companyId);
       const [issuedNow, fundedNow] = await Promise.all([
         viewIssued(employer.contract, employer.address, company, BigInt(selected.epoch)).catch(() => 0n),
         viewFunding(employer.contract, employer.address, company, BigInt(selected.epoch)).catch(() => 0n),
@@ -1290,7 +1311,7 @@ function App() {
                       {paychecks.map((p, i) => (
                         <div className="pc-row" key={i}>
                           <div>
-                            <div className="pc-company">{p.company || '—'}</div>
+                            <div className="pc-company">{companyNameFor(businesses, p)}</div>
                             <div className="pc-meta">
                               epoch {p.epoch} · {p.role || 'no role'}
                             </div>
