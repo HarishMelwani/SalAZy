@@ -30,6 +30,9 @@ const TX_HISTORY_KEY = 'salazy.txhistory.v1';
 const PROVED_KEY = 'salazy.proved.v1';
 const PAID_KEY = 'salazy.paid.v1';
 const PLANNED_KEY = 'salazy.planned.v1';
+const ROLLOVER_KEY = 'salazy.rollover.v1';
+const TOPUPS_KEY = 'salazy.topups.v1';
+const ROLLOVER_PENDING_KEY = 'salazy.rolloverPending.v1';
 const TX_HISTORY_MAX = 20;
 
 type EmployeeRow = {
@@ -251,6 +254,14 @@ function App() {
   const [plannedTotals, setPlannedTotals] = useState<Record<string, string>>(() =>
     loadJson<Record<string, string>>(PLANNED_KEY, {}),
   );
+  // Where a period's funding came from, for the breakdown under the Funded
+  // chip: rollovers keyed by TARGET period, manual top-ups by their period.
+  const [rollovers, setRollovers] = useState<Record<string, string>>(() =>
+    loadJson<Record<string, string>>(ROLLOVER_KEY, {}),
+  );
+  const [topups, setTopups] = useState<Record<string, string>>(() =>
+    loadJson<Record<string, string>>(TOPUPS_KEY, {}),
+  );
 
   function addLog(text: string, err = false) {
     setLog((l) => [
@@ -297,6 +308,48 @@ function App() {
       persistJson(PLANNED_KEY, next);
       return next;
     });
+  }
+
+  /** Records how much was rolled INTO a period (breakdown display). */
+  function recordRollover(key: string, amount: bigint) {
+    if (amount === 0n) return;
+    setRollovers((p) => {
+      const next = { ...p, [key]: (BigInt(p[key] ?? '0') + amount).toString() };
+      persistJson(ROLLOVER_KEY, next);
+      return next;
+    });
+  }
+
+  /** Records a manual top-up made in a period (breakdown display). */
+  function recordTopup(key: string, amount: bigint) {
+    if (amount === 0n) return;
+    setTopups((p) => {
+      const next = { ...p, [key]: (BigInt(p[key] ?? '0') + amount).toString() };
+      persistJson(TOPUPS_KEY, next);
+      return next;
+    });
+  }
+
+  /**
+   * Marks that a rollover tx is being sent FROM this period (value = amount).
+   * A pending mark without success means "already sent, don't send again" —
+   * it prevents a retry from double-funding the next period.
+   */
+  function markRolloverPending(key: string, amount: bigint) {
+    const map = loadJson<Record<string, string>>(ROLLOVER_PENDING_KEY, {});
+    map[key] = amount.toString();
+    persistJson(ROLLOVER_PENDING_KEY, map);
+  }
+
+  function rolloverPendingAmount(key: string): bigint | null {
+    const map = loadJson<Record<string, string>>(ROLLOVER_PENDING_KEY, {});
+    return map[key] !== undefined ? BigInt(map[key]) : null;
+  }
+
+  function clearRolloverPending(key: string) {
+    const map = loadJson<Record<string, string>>(ROLLOVER_PENDING_KEY, {});
+    delete map[key];
+    persistJson(ROLLOVER_PENDING_KEY, map);
   }
 
   useEffect(() => {
@@ -609,6 +662,16 @@ function App() {
     currentPayroll.funded > 0n &&
     currentPayroll.issued >= currentPayroll.funded;
 
+  const breakdownParts = useMemo(() => {
+    if (!currentPayroll || currentPayroll.funded === 0n) return [] as string[];
+    const parts: string[] = [];
+    const rolled = BigInt(rollovers[periodKey] ?? '0');
+    const topped = BigInt(topups[periodKey] ?? '0');
+    if (rolled > 0n) parts.push(`${formatAmount(rolled)} rolled over`);
+    if (topped > 0n) parts.push(`${formatAmount(topped)} funded here`);
+    return parts;
+  }, [currentPayroll, rollovers, topups, periodKey]);
+
   const handleFund = useCallback(async () => {
     if (!employer || !selected) return;
     const amount = parseAmount(fundAmount);
@@ -624,6 +687,7 @@ function App() {
       const txHash = await fund(employer.contract, employer.address, company, BigInt(selected.epoch), amount);
       addLog(`Funded ${formatAmount(amount)} for epoch ${selected.epoch} · tx ${shortAddress(txHash, 8)}`);
       recordTx('fund', `Fund epoch ${selected.epoch}`, txHash);
+      recordTopup(periodKey, amount);
       setFundAmount('');
       setTimeout(() => refreshPayroll(selected), 4000);
     } catch (err) {
@@ -634,7 +698,7 @@ function App() {
     } finally {
       setBusy('');
     }
-  }, [employer, selected, fundAmount, refreshPayroll]);
+  }, [employer, selected, fundAmount, refreshPayroll, periodKey]);
 
   const handlePayEveryone = useCallback(async () => {
     if (!employer || !selected) return;
@@ -773,24 +837,47 @@ function App() {
         viewIssued(employer.contract, employer.address, company, BigInt(selected.epoch)),
       ]);
       const leftover = funded > issued ? funded - issued : 0n;
-      if (leftover > 0n) {
-        addLog(
-          `Rolling over ${formatAmount(leftover)} leftover funding to epoch ${selected.epoch + 1}…`,
-        );
-        const txHash = await fund(
-          employer.contract,
-          employer.address,
-          company,
-          BigInt(selected.epoch + 1),
-          leftover,
-        );
-        recordTx('fund', `Rollover to epoch ${selected.epoch + 1}`, txHash);
-        addLog(`Rolled over ${formatAmount(leftover)} · tx ${shortAddress(txHash, 8)}`);
+      const targetKey = `${selected.id}:${selected.epoch + 1}`;
+      let rolledAmount = 0n;
+      if (leftover > 0n || rolloverPendingAmount(periodKey) !== null) {
+        const pending = rolloverPendingAmount(periodKey);
+        if (pending !== null) {
+          // A previous attempt already sent this rollover tx. Reuse it —
+          // sending again would inflate the new period's pool.
+          rolledAmount = pending;
+          addLog(
+            `Rollover of ${formatAmount(pending)} was already sent earlier — not sending a duplicate`,
+          );
+        } else {
+          rolledAmount = leftover;
+          markRolloverPending(periodKey, rolledAmount);
+          addLog(
+            `Rolling over ${formatAmount(rolledAmount)} leftover funding to epoch ${selected.epoch + 1}…`,
+          );
+          try {
+            const txHash = await fund(
+              employer.contract,
+              employer.address,
+              company,
+              BigInt(selected.epoch + 1),
+              rolledAmount,
+            );
+            recordTx('fund', `Rollover to epoch ${selected.epoch + 1}`, txHash);
+            addLog(`Rolled over ${formatAmount(rolledAmount)} · tx ${shortAddress(txHash, 8)}`);
+          } catch (err) {
+            // The send failed, so treat it as not landed and allow a clean retry.
+            clearRolloverPending(periodKey);
+            throw err;
+          }
+        }
+        recordRollover(targetKey, rolledAmount);
       }
       const next = businesses.map((b) =>
         b.id === selected.id ? { ...b, epoch: b.epoch + 1 } : b,
       );
       saveBusiness(next);
+      // Rollover fully done (tx + advance): the guard can stand down.
+      clearRolloverPending(periodKey);
       setPayroll(null);
       setFundAmount('');
       showToast(
@@ -815,7 +902,7 @@ function App() {
     } finally {
       setBusy('');
     }
-  }, [businesses, selected, saveBusiness, isProved, employer, refreshPayroll]);
+  }, [businesses, selected, saveBusiness, isProved, employer, refreshPayroll, periodKey]);
 
   const handleProve = useCallback(async () => {
     if (!employer || !selected) return;
@@ -1181,6 +1268,9 @@ function App() {
                             </div>
                           )}
                         </div>
+                      )}
+                      {breakdownParts.length > 0 && (
+                        <p className="fund-break">Pool: {breakdownParts.join(' · ')}</p>
                       )}
                     </div>
 

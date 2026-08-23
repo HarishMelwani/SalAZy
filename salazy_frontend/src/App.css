@@ -1433,3 +1433,10 @@ code {
   color: #fff;
   border: none;
 }
+
+/* Where the period's funding came from (rollover vs top-ups). */
+.fund-break {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 10px;
+}
