@@ -211,6 +211,12 @@ body::after {
   overflow: hidden;
 }
 
+.hero-alt {
+  display: flex;
+  gap: 10px;
+  margin-top: -6px;
+}
+
 .orb {
   position: absolute;
   border-radius: 50%;

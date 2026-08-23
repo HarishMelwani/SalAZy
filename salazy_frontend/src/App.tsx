@@ -4,7 +4,13 @@ import type { EmbeddedWallet } from '@aztec/wallets/embedded';
 import type { SalAZyContract } from './generated/SalAZy';
 import { registerSponsoredFPC } from './fees';
 import { SALAZY_CONTRACT_ADDRESS } from './config';
-import { createWallet, createSessionAccount } from './wallet';
+import {
+  createWallet,
+  createSessionAccount,
+  exportAccountBackup,
+  importAccountBackup,
+  type WalletBackup,
+} from './wallet';
 import {
   attachToSalAZy,
   encodeField,
@@ -389,6 +395,81 @@ function App() {
     setError('');
     addLog('Disconnected');
   }, [walletRef]);
+
+  // ---- Wallet backup / restore (portable identity file) -------------------
+
+  const handleBackup = useCallback(async () => {
+    const wallet = walletRef.employer;
+    if (!wallet || !employer) return;
+    try {
+      const backup = await exportAccountBackup(wallet, employer.address);
+      const blob = new Blob([JSON.stringify(backup, null, 2)], {
+        type: 'application/json',
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `salazy-backup-${employer.address.toString().slice(2, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      addLog('Backup downloaded — keep this file somewhere safe');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(`Backup failed: ${msg}`);
+      addLog(`Backup error: ${msg}`, true);
+    }
+  }, [employer, walletRef]);
+
+  const restoreInputRef = useRef<HTMLInputElement>(null);
+
+  const pickRestoreFile = useCallback(
+    () => restoreInputRef.current?.click(),
+    [],
+  );
+
+  const handleRestoreFile = useCallback(
+    async (file: File) => {
+      setConnecting(true);
+      setError('');
+      try {
+        setStatus('Reading backup…');
+        let backup: WalletBackup;
+        try {
+          backup = JSON.parse(await file.text()) as WalletBackup;
+        } catch {
+          throw new Error('that file is not valid JSON');
+        }
+        setStatus('Restoring identity…');
+        const wallet = await createWallet({
+          proverEnabled: true,
+          onProgress: setStatus,
+        });
+        walletRef.employer = wallet;
+        walletRef.employee = wallet;
+        const address = await importAccountBackup(wallet, backup);
+        setStatus('Registering fee contracts…');
+        await registerSponsoredFPC(wallet);
+        const contract = await attachToSalAZy(wallet);
+        setEmployer({ address, contract });
+        setEmployee({ address, contract });
+        addLog(`Wallet restored ${shortAddress(address.toString())}`);
+        setStatus('Ready');
+      } catch (err) {
+        if (isChunkLoadError(err) && recoverFromChunkLoadError()) return;
+        walletRef.employer = null;
+        walletRef.employee = null;
+        const msg = err instanceof Error ? err.message : String(err);
+        setError(`Restore failed: ${msg}`);
+        addLog(`Restore error: ${msg}`, true);
+      } finally {
+        setConnecting(false);
+        setStatus('');
+      }
+    },
+    [walletRef],
+  );
 
   const refreshPayroll = useCallback(
     async (b: Business) => {
@@ -995,12 +1076,39 @@ function App() {
             Aztec testnet · live
           </div>
           {connected && (
-            <button className="icon-btn disconnect" onClick={handleDisconnect}>
-              Disconnect
-            </button>
+            <>
+              <button
+                className="icon-btn"
+                onClick={handleBackup}
+                title="Download your identity keys as a backup file"
+              >
+                Backup
+              </button>
+              <button
+                className="icon-btn"
+                onClick={pickRestoreFile}
+                title="Import identity keys from a backup file"
+              >
+                Restore
+              </button>
+              <button className="icon-btn disconnect" onClick={handleDisconnect}>
+                Disconnect
+              </button>
+            </>
           )}
         </div>
       </header>
+      <input
+        ref={restoreInputRef}
+        type="file"
+        accept="application/json,.json"
+        hidden
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = '';
+          if (file) void handleRestoreFile(file);
+        }}
+      />
 
       {error && <div className="error">{error}</div>}
 
@@ -1045,6 +1153,11 @@ function App() {
           <button className="btn primary big" onClick={handleConnect} disabled={connecting}>
             Open SalAZy
           </button>
+          <div className="hero-alt">
+            <button className="btn outline small" onClick={pickRestoreFile}>
+              Restore from backup file
+            </button>
+          </div>
         </section>
       )}
 
