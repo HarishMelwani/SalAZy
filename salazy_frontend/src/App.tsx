@@ -1101,8 +1101,12 @@ function App() {
             Open SalAZy
           </button>
           <div className="hero-alt">
-            <button className="btn outline small" onClick={pickRestoreFile}>
-              Restore from backup file
+            <button
+              className="btn primary big"
+              onClick={pickRestoreFile}
+              title="Import identity keys from a backup file"
+            >
+              Import from backup
             </button>
           </div>
         </section>
