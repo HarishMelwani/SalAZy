@@ -957,15 +957,32 @@ function App() {
       }
       // Prove against what was actually planned and sent, not against the
       // on-chain issued amount (which would make issued == total trivial).
+      // EXCEPTION: when on-chain issued EXCEEDS the local plan, this browser's
+      // ledger is behind reality — a pay tx landed but its confirmation was
+      // never recorded (lost after reload / retried send). Reconcile UP to the
+      // chain and prove against it; hard-failing here would brick the period.
       const plannedRaw = plannedTotals[periodKey];
-      const planned = plannedRaw !== undefined ? BigInt(plannedRaw) : null;
+      let planned = plannedRaw !== undefined ? BigInt(plannedRaw) : null;
+      if (planned !== null && issuedNow > planned) {
+        const recordedPlan = planned;
+        setPlannedTotals((p) => {
+          const next = { ...p, [periodKey]: issuedNow.toString() };
+          persistJson(PLANNED_KEY, next);
+          return next;
+        });
+        addLog(
+          `On-chain issued ${formatAmount(issuedNow)} exceeds the recorded plan ${formatAmount(recordedPlan)} — a pay tx landed without being recorded. Reconciled plan to ${formatAmount(issuedNow)}.`,
+          true,
+        );
+        planned = issuedNow;
+      }
       const target = planned ?? issuedNow;
-      if (planned !== null && issuedNow !== planned) {
+      if (planned !== null && issuedNow < target) {
         setError(
-          `Issued ${formatAmount(issuedNow)} of ${formatAmount(planned)} planned — pay the remaining employees first`,
+          `Issued ${formatAmount(issuedNow)} of ${formatAmount(target)} planned — pay the remaining employees first`,
         );
         addLog(
-          `Not paid: issued ${formatAmount(issuedNow)} != planned ${formatAmount(planned)}`,
+          `Not paid: issued ${formatAmount(issuedNow)} < planned ${formatAmount(target)}`,
           true,
         );
         return;
