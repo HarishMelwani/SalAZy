@@ -121,24 +121,6 @@ function recoverFromChunkLoadError(): boolean {
   return true;
 }
 
-/** The hashed index bundle this running tab was built from (null in dev). */
-function currentBundleSrc(): string | null {
-  return (
-    document.querySelector<HTMLScriptElement>('script[type="module"][src*="/assets/index-"]')
-      ?.getAttribute('src') ?? null
-  );
-}
-
-async function fetchLatestBundleSrc(): Promise<string | null> {
-  try {
-    const res = await fetch(`/?t=${Date.now()}`, { cache: 'no-store' });
-    if (!res.ok) return null;
-    return (await res.text()).match(/assets\/index-[A-Za-z0-9_-]+\.js/)?.[0] ?? null;
-  } catch {
-    return null;
-  }
-}
-
 function parseAmount(s: string): bigint | null {
   const m = /^(\d+)(?:\.(\d{1,2}))?$/.exec(s.trim());
   if (!m) return null;
@@ -228,7 +210,6 @@ function App() {
   const [busy, setBusy] = useState<string>('');
   const [log, setLog] = useState<LogLine[]>([]);
   const [toast, setToast] = useState<string>('');
-  const [outdated, setOutdated] = useState(false);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const lastPaycheckCount = useRef<number | null>(null);
@@ -1035,31 +1016,6 @@ function App() {
     }
   }, []);
 
-  // Detect a fresh deploy while the tab is open and offer a refresh, so lazy
-  // chunks never go missing mid-action.
-  useEffect(() => {
-    if (!connected) return;
-    let stop = false;
-    const check = async () => {
-      const mine = currentBundleSrc()?.split('/').pop();
-      if (!mine) return; // dev server: no hashed bundles
-      const latest = await fetchLatestBundleSrc();
-      if (!stop && latest && latest !== mine) setOutdated(true);
-    };
-    const first = setTimeout(check, 8000);
-    const id = setInterval(check, 90000);
-    const onVisible = () => {
-      if (document.visibilityState === 'visible') void check();
-    };
-    document.addEventListener('visibilitychange', onVisible);
-    return () => {
-      stop = true;
-      clearTimeout(first);
-      clearInterval(id);
-      document.removeEventListener('visibilitychange', onVisible);
-    };
-  }, [connected]);
-
   return (
     <div className="app">
       <header className="topbar">
@@ -1111,15 +1067,6 @@ function App() {
       />
 
       {error && <div className="error">{error}</div>}
-
-      {outdated && (
-        <div className="update-banner">
-          <span>SalAZy was updated — refresh to load the latest version</span>
-          <button className="btn small" onClick={() => window.location.reload()}>
-            Refresh
-          </button>
-        </div>
-      )}
 
       {!connected && !connecting && !status && (
         <section className="hero">
@@ -1494,11 +1441,6 @@ function App() {
                           {isProved ? 'Next period ›' : '🔒 Next period ›'}
                         </button>
                       </div>
-                      <p className="muted">
-                        Fund the period, then pay everyone with one click. Each
-                        salary is a private encrypted note; amounts stay hidden.
-                        Unspent funding waits for you in the next period.
-                      </p>
                       {showCarryOver && (
                         <div className="pay-note carry">
                           <span className="pay-note-dot" />
@@ -1519,25 +1461,22 @@ function App() {
                         </div>
                       )}
                       <div className="payroll-actions">
-                        <div className="row grow">
-                          {fundNeeded > 0n ? (
-                            <button
-                              className="btn primary grow"
-                              onClick={handleFund}
-                              disabled={busy !== ''}
-                              title={`Funds exactly the shortfall: ${formatAmount(salaryTotal)} salaries − already funded`}
-                            >
-                              {busy === 'fund'
-                                ? 'Funding…'
-                                : `Fund ${formatAmount(fundNeeded)} · exact`}
-                            </button>
-                          ) : (
-                            <div className="pay-note ok">
-                              <span className="pay-note-dot" />
-                              <span>Fully funded for this period ✓</span>
-                            </div>
-                          )}
-                        </div>
+                        <button
+                          className="btn primary"
+                          onClick={handleFund}
+                          disabled={busy !== '' || fundNeeded === 0n}
+                          title={
+                            fundNeeded === 0n
+                              ? 'This period is fully funded'
+                              : `Funds exactly the shortfall: ${formatAmount(salaryTotal)} salaries − already funded`
+                          }
+                        >
+                          {busy === 'fund'
+                            ? 'Funding…'
+                            : fundNeeded === 0n
+                              ? 'Funded ✓'
+                              : `Fund ${formatAmount(fundNeeded)} · exact`}
+                        </button>
                         <button
                           className="btn primary"
                           onClick={handlePayEveryone}
@@ -1561,6 +1500,22 @@ function App() {
                               : payrollShortfall !== null
                                 ? 'Fund required first'
                                 : 'Pay everyone'}
+                        </button>
+                        <button
+                          className="btn primary"
+                          onClick={handleProve}
+                          disabled={busy !== '' || isProved}
+                          title={
+                            isProved
+                              ? 'This period is proved fully paid ✓'
+                              : 'Check this period: proves fully paid, or fails with not paid'
+                          }
+                        >
+                          {busy === 'prove'
+                            ? 'Proving…'
+                            : isProved
+                              ? 'Proved fully paid ✓'
+                              : 'Prove fully paid'}
                         </button>
                         {payrollShortfall !== null && (
                           <div className="pay-note">
@@ -1592,22 +1547,6 @@ function App() {
                             Everyone paid ✓ — ready to prove fully paid
                           </div>
                         )}
-                        <button
-                          className="btn outline"
-                          onClick={handleProve}
-                          disabled={busy !== '' || isProved}
-                          title={
-                            isProved
-                              ? 'This period is proved fully paid ✓'
-                              : 'Check this period: proves fully paid, or fails with not paid'
-                          }
-                        >
-                          {busy === 'prove'
-                            ? 'Proving…'
-                            : isProved
-                              ? 'Proved fully paid ✓'
-                              : 'Prove fully paid'}
-                        </button>
                         {isProved && (
                           <div className="pay-note ok">
                             <span className="pay-note-dot" />
