@@ -15,6 +15,7 @@ import {
   MAX_EMPLOYEES_PER_PAYRUN,
   proveFullyPaid,
   randomCompanyId,
+  textFitsField,
   viewBalance,
   viewBalanceNotes,
   viewFunding,
@@ -74,6 +75,15 @@ type TxRecord = {
 
 function shortAddress(addr: string, n = 10) {
   return addr.length > n * 2 ? `${addr.slice(0, n)}…${addr.slice(-n)}` : addr;
+}
+
+function isValidAztecAddress(addr: string): boolean {
+  try {
+    AztecAddress.fromStringUnsafe(addr.trim());
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function parseAmount(s: string): bigint | null {
@@ -391,6 +401,14 @@ function App() {
       setError('Name and wallet address are required');
       return;
     }
+    if (!isValidAztecAddress(address)) {
+      setError('Wallet address is not a valid Aztec address');
+      return;
+    }
+    if (employeeForm.role.trim() && !textFitsField(employeeForm.role.trim())) {
+      setError('Role must be 31 bytes or shorter');
+      return;
+    }
     if (parseAmount(employeeForm.salary) === null && employeeForm.salary.trim() !== '') {
       setError('Salary must be a number like 1200.00');
       return;
@@ -453,6 +471,14 @@ function App() {
     const address = editingEmployeeForm.address.trim();
     if (!name || !address) {
       setError('Name and wallet address are required');
+      return;
+    }
+    if (!isValidAztecAddress(address)) {
+      setError('Wallet address is not a valid Aztec address');
+      return;
+    }
+    if (editingEmployeeForm.role.trim() && !textFitsField(editingEmployeeForm.role.trim())) {
+      setError('Role must be 31 bytes or shorter');
       return;
     }
     if (parseAmount(editingEmployeeForm.salary) === null && editingEmployeeForm.salary.trim() !== '') {
@@ -546,7 +572,7 @@ function App() {
     setError('');
     try {
       const company = fieldFromString(selected.companyId);
-      addLog(`Proving & funding epoch ${selected.epoch}…`);
+      addLog(`Funding epoch ${selected.epoch}…`);
       const txHash = await fund(employer.contract, employer.address, company, BigInt(selected.epoch), amount);
       addLog(`Funded ${formatAmount(amount)} for epoch ${selected.epoch} · tx ${shortAddress(txHash, 8)}`);
       recordTx('fund', `Fund epoch ${selected.epoch}`, txHash);
@@ -593,13 +619,12 @@ function App() {
       return;
     }
     for (const e of rows) {
-      if (parseAmount(e.salary) === null) {
-        setError(`Invalid salary for ${e.name}`);
+      const pay = parseAmount(e.salary);
+      if (pay === null || pay === 0n) {
+        setError(`Salary for ${e.name} must be a number greater than 0`);
         return;
       }
-      try {
-        AztecAddress.fromStringUnsafe(e.address.trim());
-      } catch {
+      if (!isValidAztecAddress(e.address)) {
         setError(`Invalid wallet address for ${e.name}`);
         return;
       }
