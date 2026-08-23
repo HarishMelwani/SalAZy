@@ -27,6 +27,8 @@ import './App.css';
 const STORAGE_KEY = 'salazy.businesses.v1';
 const TX_HISTORY_KEY = 'salazy.txhistory.v1';
 const PROVED_KEY = 'salazy.proved.v1';
+const PAID_KEY = 'salazy.paid.v1';
+const PLANNED_KEY = 'salazy.planned.v1';
 const TX_HISTORY_MAX = 20;
 
 type EmployeeRow = {
@@ -92,6 +94,14 @@ function loadJson<T>(key: string, fallback: T): T {
     return raw ? (JSON.parse(raw) as T) : fallback;
   } catch {
     return fallback;
+  }
+}
+
+function persistJson(key: string, value: unknown) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Storage full or unavailable; keep in-memory only.
   }
 }
 
@@ -175,6 +185,16 @@ function App() {
       return {};
     }
   });
+  // Employee ids already paid this period: a failed batch mid-payrun can be
+  // retried without paying anyone twice.
+  const [paidEmployees, setPaidEmployees] = useState<Record<string, string[]>>(() =>
+    loadJson<Record<string, string[]>>(PAID_KEY, {}),
+  );
+  // Cumulative amount actually sent for a period (decimal string). The ZK proof
+  // runs against this planned total instead of the on-chain issued amount.
+  const [plannedTotals, setPlannedTotals] = useState<Record<string, string>>(() =>
+    loadJson<Record<string, string>>(PLANNED_KEY, {}),
+  );
 
   function addLog(text: string, err = false) {
     setLog((l) => [
@@ -199,11 +219,26 @@ function App() {
     };
     setTxHistory((h) => {
       const next = [record, ...h].slice(0, TX_HISTORY_MAX);
-      try {
-        localStorage.setItem(TX_HISTORY_KEY, JSON.stringify(next));
-      } catch {
-        // Storage full or unavailable; keep in-memory only.
-      }
+      persistJson(TX_HISTORY_KEY, next);
+      return next;
+    });
+  }
+
+  /** Marks employees as paid for a period (persisted immediately after each batch). */
+  function markPaid(key: string, ids: string[]) {
+    setPaidEmployees((p) => {
+      const next = { ...p, [key]: [...(p[key] ?? []), ...ids] };
+      persistJson(PAID_KEY, next);
+      return next;
+    });
+  }
+
+  /** Adds to the period's planned total — what was actually sent on-chain. */
+  function addPlanned(key: string, amount: bigint) {
+    if (amount === 0n) return;
+    setPlannedTotals((p) => {
+      const next = { ...p, [key]: (BigInt(p[key] ?? '0') + amount).toString() };
+      persistJson(PLANNED_KEY, next);
       return next;
     });
   }
@@ -218,8 +253,8 @@ function App() {
 
   const selected = businesses.find((b) => b.id === selectedId) ?? null;
 
-  const provedKey = selected ? `${selected.id}:${selected.epoch}` : '';
-  const isProved = provedKey ? !!provedEpochs[provedKey] : false;
+  const periodKey = selected ? `${selected.id}:${selected.epoch}` : '';
+  const isProved = periodKey ? !!provedEpochs[periodKey] : false;
 
   const saveBusiness = useCallback((next: Business[]) => {
     setBusinesses(next);
@@ -528,14 +563,26 @@ function App() {
 
   const handlePayEveryone = useCallback(async () => {
     if (!employer || !selected) return;
-    if (alreadyPaid) {
-      setError('Everyone was already paid this period — start a new period to pay again');
-      addLog('Blocked: this period is already fully paid', true);
+    const paidSet = new Set(paidEmployees[periodKey] ?? []);
+    const rows = activeEmployees.filter((e) => !paidSet.has(e.id));
+    if (activeEmployees.length === 0) {
+      setError('Add at least one employee first');
       return;
     }
-    const rows = activeEmployees;
     if (rows.length === 0) {
-      setError('Add at least one employee first');
+      setError(
+        'Everyone on this list was already paid this period — start a new period to pay again',
+      );
+      addLog('Blocked: every employee was already paid this period', true);
+      return;
+    }
+    if (alreadyPaid) {
+      // Funding pool exhausted (issued == funded) but people are still unpaid:
+      // topping up the period unlocks the rest.
+      setError(
+        `This period's funding is fully issued — fund more to pay the remaining ${rows.length} employee${rows.length === 1 ? '' : 's'}`,
+      );
+      addLog(`Blocked: period funding exhausted, ${rows.length} unpaid`, true);
       return;
     }
     if (payrollShortfall !== null) {
@@ -561,34 +608,54 @@ function App() {
     setError('');
     try {
       const company = fieldFromString(selected.companyId);
-      const employees = rows.map((e) => ({
-        address: AztecAddress.fromStringUnsafe(e.address.trim()),
-        amount: parseAmount(e.salary)!,
-        role: encodeField(e.role),
+      const entries: { id: string; input: EmployeeInput }[] = rows.map((e) => ({
+        id: e.id,
+        input: {
+          address: AztecAddress.fromStringUnsafe(e.address.trim()),
+          amount: parseAmount(e.salary)!,
+          role: encodeField(e.role),
+        },
       }));
-      const batches: EmployeeInput[][] = [];
-      for (let i = 0; i < employees.length; i += MAX_EMPLOYEES_PER_PAYRUN) {
-        batches.push(employees.slice(i, i + MAX_EMPLOYEES_PER_PAYRUN));
+      const batches: typeof entries[] = [];
+      for (let i = 0; i < entries.length; i += MAX_EMPLOYEES_PER_PAYRUN) {
+        batches.push(entries.slice(i, i + MAX_EMPLOYEES_PER_PAYRUN));
       }
+      const alreadyCount = activeEmployees.length - rows.length;
       const hashes: string[] = [];
       for (let b = 0; b < batches.length; b++) {
         const batch = batches[b];
         addLog(
-          `Proving batch pay ${b + 1}/${batches.length} (${batch.length} employee${batch.length === 1 ? '' : 's'})…`,
+          `Paying batch ${b + 1}/${batches.length} (${batch.length} employee${batch.length === 1 ? '' : 's'})…`,
         );
-        const txHash = await issueSalaries(employer.contract, employer.address, company, BigInt(selected.epoch), batch);
+        const txHash = await issueSalaries(
+          employer.contract,
+          employer.address,
+          company,
+          BigInt(selected.epoch),
+          batch.map((x) => x.input),
+        );
         hashes.push(txHash);
+        // Persist progress after every batch: a later failure resumes here
+        // instead of re-paying this batch.
+        markPaid(
+          periodKey,
+          batch.map((x) => x.id),
+        );
+        addPlanned(
+          periodKey,
+          batch.reduce((sum, x) => sum + x.input.amount, 0n),
+        );
         recordTx('pay', `Pay ${batch.length} (epoch ${selected.epoch}, batch ${b + 1})`, txHash);
       }
       addLog(
-        `Paid ${rows.length} employee${rows.length === 1 ? '' : 's'} privately (epoch ${selected.epoch}) · tx ${hashes
-          .map((h) => shortAddress(h, 8))
-          .join(', ')}`,
+        `Paid ${rows.length} employee${rows.length === 1 ? '' : 's'} privately (epoch ${selected.epoch})${
+          alreadyCount > 0 ? ` · ${alreadyCount} already paid earlier` : ''
+        } · tx ${hashes.map((h) => shortAddress(h, 8)).join(', ')}`,
       );
       showToast(`Paid ${rows.length} employee${rows.length === 1 ? '' : 's'} ✓`);
       setPayroll(null);
       setProvedEpochs((p) => {
-        const next = { ...p, [provedKey]: false };
+        const next = { ...p, [periodKey]: false };
         try { localStorage.setItem(PROVED_KEY, JSON.stringify(next)); } catch {}
         return next;
       });
@@ -609,7 +676,8 @@ function App() {
     currentPayroll,
     salaryTotal,
     alreadyPaid,
-    provedKey,
+    periodKey,
+    paidEmployees,
   ]);
 
   const handleNextPeriod = useCallback(() => {
@@ -650,24 +718,39 @@ function App() {
         addLog('Not paid: nothing issued for this period', true);
         return;
       }
-      if (fundedNow < issuedNow) {
-        const shortfall = issuedNow - fundedNow;
+      // Prove against what was actually planned and sent, not against the
+      // on-chain issued amount (which would make issued == total trivial).
+      const plannedRaw = plannedTotals[periodKey];
+      const planned = plannedRaw !== undefined ? BigInt(plannedRaw) : null;
+      const target = planned ?? issuedNow;
+      if (planned !== null && issuedNow !== planned) {
         setError(
-          `This period is under-funded: ${formatAmount(fundedNow)} funded but ${formatAmount(issuedNow)} issued. Fund ${formatAmount(shortfall)} more first`,
+          `Issued ${formatAmount(issuedNow)} of ${formatAmount(planned)} planned — pay the remaining employees first`,
         );
         addLog(
-          `Not paid: funded ${formatAmount(fundedNow)} < issued ${formatAmount(issuedNow)} — fund ${formatAmount(shortfall)} more`,
+          `Not paid: issued ${formatAmount(issuedNow)} != planned ${formatAmount(planned)}`,
           true,
         );
         return;
       }
-      addLog(`Building ZK proof issued == funded…`);
-      const txHash = await proveFullyPaid(employer.contract, employer.address, company, BigInt(selected.epoch), issuedNow);
+      if (fundedNow < target) {
+        const shortfall = target - fundedNow;
+        setError(
+          `This period is under-funded: ${formatAmount(fundedNow)} funded but ${formatAmount(target)} planned. Fund ${formatAmount(shortfall)} more first`,
+        );
+        addLog(
+          `Not paid: funded ${formatAmount(fundedNow)} < planned ${formatAmount(target)} — fund ${formatAmount(shortfall)} more`,
+          true,
+        );
+        return;
+      }
+      addLog(`Building ZK proof issued == planned (${formatAmount(target)})…`);
+      const txHash = await proveFullyPaid(employer.contract, employer.address, company, BigInt(selected.epoch), target);
       addLog(`✓ PROVED fully paid for epoch ${selected.epoch} · tx ${shortAddress(txHash, 8)} — zero amounts revealed`);
       recordTx('prove', `Prove fully paid · epoch ${selected.epoch}`, txHash);
       showToast('Proved fully paid ✓');
       setProvedEpochs((p) => {
-        const next = { ...p, [provedKey]: true };
+        const next = { ...p, [periodKey]: true };
         try { localStorage.setItem(PROVED_KEY, JSON.stringify(next)); } catch {}
         return next;
       });
@@ -677,14 +760,14 @@ function App() {
       setError(msg);
       addLog(`Not paid: ${msg}`, true);
       setProvedEpochs((p) => {
-        const next = { ...p, [provedKey]: false };
+        const next = { ...p, [periodKey]: false };
         try { localStorage.setItem(PROVED_KEY, JSON.stringify(next)); } catch {}
         return next;
       });
     } finally {
       setBusy('');
     }
-  }, [employer, selected, refreshPayroll, provedKey]);
+  }, [employer, selected, refreshPayroll, periodKey, plannedTotals]);
 
   const copyText = useCallback(async (text: string, label: string) => {
     try {
