@@ -215,7 +215,6 @@ function App() {
     salary: '',
     role: '',
   });
-  const [fundAmount, setFundAmount] = useState('');
   const [payroll, setPayroll] = useState<Payroll | null>(null);
   const [epochHistory, setEpochHistory] = useState<EpochRecord[]>([]);
   const [paychecks, setPaychecks] = useState<SalaryNote[]>([]);
@@ -661,23 +660,40 @@ function App() {
   const showCarryOver =
     prevEpochLeftover > 0n && BigInt(rollovers[periodKey] ?? '0') === 0n;
 
+  // Exact shortfall to fund this period (display only — the tx re-reads
+  // on-chain funding right before sending, so it can never over/under-fund).
+  const fundNeeded = currentPayroll
+    ? currentPayroll.funded >= salaryTotal
+      ? 0n
+      : salaryTotal - currentPayroll.funded
+    : salaryTotal;
+
   const handleFund = useCallback(async () => {
     if (!employer || !selected) return;
-    const amount = parseAmount(fundAmount);
-    if (amount === null || amount <= 0n) {
-      setError('Enter a valid funding amount');
-      return;
-    }
     setBusy('fund');
     setError('');
     try {
       const company = fieldFromString(selected.companyId);
-      addLog(`Funding epoch ${selected.epoch}…`);
-      const txHash = await fund(employer.contract, employer.address, company, BigInt(selected.epoch), amount);
-      addLog(`Funded ${formatAmount(amount)} for epoch ${selected.epoch} · tx ${shortAddress(txHash, 8)}`);
-      recordTx('fund', `Fund epoch ${selected.epoch}`, txHash);
-      recordTopup(periodKey, amount);
-      setFundAmount('');
+      // Exact funding: read FRESH on-chain funding right before sending, so
+      // the tx is precisely the shortfall — never more, never less — even if
+      // the cached view is behind or a carry-over just landed.
+      const freshFunded = await viewFunding(
+        employer.contract,
+        employer.address,
+        company,
+        BigInt(selected.epoch),
+      ).catch(() => 0n);
+      const needed = salaryTotal > freshFunded ? salaryTotal - freshFunded : 0n;
+      if (needed === 0n) {
+        setError('This period is already fully funded');
+        addLog('Blocked: period already fully funded', true);
+        return;
+      }
+      addLog(`Funding the exact shortfall for epoch ${selected.epoch}: ${formatAmount(needed)}…`);
+      const txHash = await fund(employer.contract, employer.address, company, BigInt(selected.epoch), needed);
+      addLog(`Funded ${formatAmount(needed)} for epoch ${selected.epoch} · tx ${shortAddress(txHash, 8)}`);
+      recordTx('fund', `Fund ${formatAmount(needed)} (epoch ${selected.epoch})`, txHash);
+      recordTopup(periodKey, needed);
       setTimeout(() => refreshPayroll(selected), 4000);
     } catch (err) {
       if (isChunkLoadError(err) && recoverFromChunkLoadError()) return;
@@ -687,7 +703,7 @@ function App() {
     } finally {
       setBusy('');
     }
-  }, [employer, selected, fundAmount, refreshPayroll, periodKey]);
+  }, [employer, selected, refreshPayroll, periodKey, salaryTotal]);
 
   const handlePayEveryone = useCallback(async () => {
     if (!employer || !selected) return;
@@ -823,7 +839,6 @@ function App() {
     );
     saveBusiness(next);
     setPayroll(null);
-    setFundAmount('');
     showToast(`Started period ${selected.epoch + 1}`);
     addLog(`Started period ${selected.epoch + 1}`);
   }, [businesses, selected, saveBusiness, isProved]);
@@ -1392,18 +1407,23 @@ function App() {
                       )}
                       <div className="payroll-actions">
                         <div className="row grow">
-                          <input
-                            value={fundAmount}
-                            onChange={(e) => setFundAmount(e.target.value)}
-                            placeholder={`Fund amount (suggested ${formatAmount(salaryTotal)})`}
-                          />
-                          <button
-                            className="btn"
-                            onClick={handleFund}
-                            disabled={busy === 'fund' || !fundAmount.trim()}
-                          >
-                            {busy === 'fund' ? 'Funding…' : 'Fund'}
-                          </button>
+                          {fundNeeded > 0n ? (
+                            <button
+                              className="btn primary grow"
+                              onClick={handleFund}
+                              disabled={busy !== ''}
+                              title={`Funds exactly the shortfall: ${formatAmount(salaryTotal)} salaries − already funded`}
+                            >
+                              {busy === 'fund'
+                                ? 'Funding…'
+                                : `Fund ${formatAmount(fundNeeded)} · exact`}
+                            </button>
+                          ) : (
+                            <div className="pay-note ok">
+                              <span className="pay-note-dot" />
+                              <span>Fully funded for this period ✓</span>
+                            </div>
+                          )}
                         </div>
                         <button
                           className="btn primary"
@@ -1430,15 +1450,12 @@ function App() {
                                 : 'Pay everyone'}
                         </button>
                         {payrollShortfall !== null && (
-                          <div
-                            className="pay-note"
-                            onClick={() => setFundAmount(formatAmount(payrollShortfall))}
-                          >
+                          <div className="pay-note">
                             <span className="pay-note-dot" />
                             {formatAmount(currentPayroll!.funded)} funded of{' '}
-                            {formatAmount(salaryTotal)} required. Fund{' '}
+                            {formatAmount(salaryTotal)} required.{' '}
                             <strong>{formatAmount(payrollShortfall)}</strong> more to unlock
-                            payment <span className="pay-fill">click to fill ↦</span>
+                            payment — the Fund button covers exactly this
                           </div>
                         )}
                         {payrollShortfall === null &&
