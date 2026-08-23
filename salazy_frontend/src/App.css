@@ -1409,3 +1409,27 @@ code {
     padding: 16px 18px 36px;
   }
 }
+/* Fresh-deploy notice: the tab kept running while a new version shipped. */
+.update-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 10px 16px;
+  background: rgba(18, 8, 42, 0.96);
+  border-bottom: 1px solid var(--line);
+  color: var(--cream);
+  font-size: 13px;
+}
+
+.update-banner .btn.small {
+  background: var(--violet);
+  color: #fff;
+  border: none;
+}

@@ -86,6 +86,51 @@ function isValidAztecAddress(addr: string): boolean {
   }
 }
 
+/**
+ * A redeploy replaces content-hashed chunks, so a tab that stayed open across
+ * a deploy fails its next lazy import ("Failed to fetch dynamically imported
+ * module"). Detect that and reload once to pick up the fresh bundle.
+ */
+function isChunkLoadError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    /failed to fetch dynamically imported module/i.test(msg) ||
+    /error loading dynamically imported module/i.test(msg) ||
+    /importing a module script failed/i.test(msg)
+  );
+}
+
+const CHUNK_RELOAD_FLAG = 'salazy.chunkReload';
+
+function recoverFromChunkLoadError(): boolean {
+  try {
+    if (sessionStorage.getItem(CHUNK_RELOAD_FLAG)) return false;
+    sessionStorage.setItem(CHUNK_RELOAD_FLAG, String(Date.now()));
+  } catch {
+    // sessionStorage unavailable; still reload once.
+  }
+  window.location.reload();
+  return true;
+}
+
+/** The hashed index bundle this running tab was built from (null in dev). */
+function currentBundleSrc(): string | null {
+  return (
+    document.querySelector<HTMLScriptElement>('script[type="module"][src*="/assets/index-"]')
+      ?.getAttribute('src') ?? null
+  );
+}
+
+async function fetchLatestBundleSrc(): Promise<string | null> {
+  try {
+    const res = await fetch(`/?t=${Date.now()}`, { cache: 'no-store' });
+    if (!res.ok) return null;
+    return (await res.text()).match(/assets\/index-[A-Za-z0-9_-]+\.js/)?.[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
 function parseAmount(s: string): bigint | null {
   const m = /^(\d+)(?:\.(\d{1,2}))?$/.exec(s.trim());
   if (!m) return null;
@@ -176,6 +221,7 @@ function App() {
   const [busy, setBusy] = useState<string>('');
   const [log, setLog] = useState<LogLine[]>([]);
   const [toast, setToast] = useState<string>('');
+  const [outdated, setOutdated] = useState(false);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const lastPaycheckCount = useRef<number | null>(null);
@@ -262,6 +308,7 @@ function App() {
   }, [businesses]);
 
   const selected = businesses.find((b) => b.id === selectedId) ?? null;
+  const connected = !!(employer && employee);
 
   const periodKey = selected ? `${selected.id}:${selected.epoch}` : '';
   const isProved = periodKey ? !!provedEpochs[periodKey] : false;
@@ -287,6 +334,7 @@ function App() {
       addLog(`Wallet ready ${shortAddress(account.address.toString())}`);
       setStatus('Ready');
     } catch (err) {
+      if (isChunkLoadError(err) && recoverFromChunkLoadError()) return;
       const msg = err instanceof Error ? err.message : String(err);
       setError(`Setup failed: ${msg}`);
       addLog(`Error: ${msg}`, true);
@@ -579,6 +627,7 @@ function App() {
       setFundAmount('');
       setTimeout(() => refreshPayroll(selected), 4000);
     } catch (err) {
+      if (isChunkLoadError(err) && recoverFromChunkLoadError()) return;
       const msg = err instanceof Error ? err.message : String(err);
       setError(`Fund failed: ${msg}`);
       addLog(`Fund error: ${msg}`, true);
@@ -686,6 +735,7 @@ function App() {
       });
       setTimeout(() => refreshPayroll(selected), 4000);
     } catch (err) {
+      if (isChunkLoadError(err) && recoverFromChunkLoadError()) return;
       const msg = err instanceof Error ? err.message : String(err);
       setError(`Payroll failed: ${msg}`);
       addLog(`Payroll error: ${msg}`, true);
@@ -823,6 +873,7 @@ function App() {
       });
       setTimeout(() => refreshPayroll(selected), 4000);
     } catch (err) {
+      if (isChunkLoadError(err) && recoverFromChunkLoadError()) return;
       const msg = err instanceof Error ? err.message : String(err);
       setError(msg);
       addLog(`Not paid: ${msg}`, true);
@@ -845,7 +896,30 @@ function App() {
     }
   }, []);
 
-  const connected = !!(employer && employee);
+  // Detect a fresh deploy while the tab is open and offer a refresh, so lazy
+  // chunks never go missing mid-action.
+  useEffect(() => {
+    if (!connected) return;
+    let stop = false;
+    const check = async () => {
+      const mine = currentBundleSrc()?.split('/').pop();
+      if (!mine) return; // dev server: no hashed bundles
+      const latest = await fetchLatestBundleSrc();
+      if (!stop && latest && latest !== mine) setOutdated(true);
+    };
+    const first = setTimeout(check, 8000);
+    const id = setInterval(check, 90000);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void check();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      stop = true;
+      clearTimeout(first);
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [connected]);
 
   return (
     <div className="app">
@@ -871,6 +945,15 @@ function App() {
       </header>
 
       {error && <div className="error">{error}</div>}
+
+      {outdated && (
+        <div className="update-banner">
+          <span>SalAZy was updated — refresh to load the latest version</span>
+          <button className="btn small" onClick={() => window.location.reload()}>
+            Refresh
+          </button>
+        </div>
+      )}
 
       {!connected && !connecting && !status && (
         <section className="hero">
