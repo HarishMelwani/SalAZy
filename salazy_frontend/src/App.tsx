@@ -221,6 +221,8 @@ function App() {
     salary: '',
     role: '',
   });
+  /** The add-employee form stays collapsed until the user asks for it. */
+  const [showAddEmployee, setShowAddEmployee] = useState(false);
   const [payroll, setPayroll] = useState<Payroll | null>(null);
   const [epochHistory, setEpochHistory] = useState<EpochRecord[]>([]);
   const [paychecks, setPaychecks] = useState<SalaryNote[]>([]);
@@ -752,6 +754,16 @@ function App() {
   const showCarryOver =
     prevEpochLeftover > 0n && BigInt(rollovers[periodKey] ?? '0') === 0n;
 
+  /** Single status for the period hero pill: proved > paid > partial > idle. */
+  const periodStatus: { cls: string; label: string } | null = (() => {
+    if (!payroll) return null;
+    if (isProved) return { cls: 'proved', label: 'Proved ✓' };
+    if (alreadyPaid) return { cls: 'paid', label: 'Paid ✓' };
+    if (payroll.funded === 0n && payroll.issued === 0n)
+      return { cls: 'idle', label: 'Not started' };
+    return { cls: 'partial', label: 'In progress' };
+  })();
+
   // Exact shortfall to fund this period (display only — the tx re-reads
   // on-chain funding right before sending, so it can never over/under-fund).
   const fundNeeded = currentPayroll
@@ -1140,6 +1152,22 @@ function App() {
           </div>
         </div>
         <div className="top-right">
+          {connected && (
+            <nav className="tabs">
+              <button
+                className={tab === 'employer' ? 'tab active' : 'tab'}
+                onClick={() => setTab('employer')}
+              >
+                Employer
+              </button>
+              <button
+                className={tab === 'employee' ? 'tab active' : 'tab'}
+                onClick={() => setTab('employee')}
+              >
+                Employee
+              </button>
+            </nav>
+          )}
           <div className="status">
             <span className="pulse" />
             Aztec testnet · live
@@ -1247,21 +1275,6 @@ function App() {
 
       {connected && (
         <main className="layout">
-          <nav className="tabs">
-            <button
-              className={tab === 'employer' ? 'tab active' : 'tab'}
-              onClick={() => setTab('employer')}
-            >
-              Employer
-            </button>
-            <button
-              className={tab === 'employee' ? 'tab active' : 'tab'}
-              onClick={() => setTab('employee')}
-            >
-              Employee
-            </button>
-          </nav>
-
           {tab === 'employer' && (
             <div className="dashboard">
               <div className="side-col">
@@ -1342,42 +1355,6 @@ function App() {
                     </button>
                   </div>
                 </div>
-
-                <details className="card tx-history">
-                  <summary>Transaction history ({txHistory.length})</summary>
-                  <div className="tx-list">
-                    {txHistory.length === 0 && (
-                      <p className="muted">No transactions yet. Fund, pay, or prove to see them here.</p>
-                    )}
-                    {txHistory.map((r) => (
-                      <div className="tx-row" key={r.id}>
-                        <span className={`tx-badge ${r.action}`}>
-                          {r.action === 'fund' ? 'F' : r.action === 'pay' ? 'P' : '✓'}
-                        </span>
-                        <span className="tx-label">{r.label}</span>
-                        <span
-                          className="tx-hash"
-                          title={`${r.hash} · ${r.time}`}
-                          onClick={() => copyText(r.hash, 'Tx hash')}
-                        >
-                          {shortAddress(r.hash, 8)}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </details>
-
-                <details className="card log">
-                  <summary>Session activity</summary>
-                  <div className="log-inner" ref={logRef}>
-                    {log.map((l, i) => (
-                      <div className={`log-line${l.err ? ' err' : ''}`} key={i}>
-                        <span className="time">{l.time}</span>
-                        {l.text}
-                      </div>
-                    ))}
-                  </div>
-                </details>
               </div>
 
               <div className="main-col">
@@ -1391,45 +1368,48 @@ function App() {
                   </div>
                 ) : (
                   <>
-                    <div className="card head">
-                      <div>
-                        <div className="card-title">{selected.name}</div>
-                        <div className="muted">
-                          Period (epoch) #{selected.epoch} · {selected.employees.length} employee
-                          {selected.employees.length === 1 ? '' : 's'} · payroll{' '}
-                          {formatAmount(salaryTotal)}
+                    <div className="card period-hero">
+                      <div className="ph-top">
+                        <div>
+                          <div className="card-title">{selected.name}</div>
+                          <div className="muted">
+                            Period #{selected.epoch} · {selected.employees.length} employee
+                            {selected.employees.length === 1 ? '' : 's'} · payroll{' '}
+                            {formatAmount(salaryTotal)}
+                          </div>
+                        </div>
+                        {periodStatus && (
+                          <span className={`status-pill ${periodStatus.cls}`}>
+                            {periodStatus.label}
+                          </span>
+                        )}
+                      </div>
+                      <div className="stat-tiles">
+                        <div className="tile">
+                          <span className="tile-lbl">Funded</span>
+                          <span className="tile-val">
+                            {payroll ? formatAmount(payroll.funded) : '…'}
+                          </span>
+                        </div>
+                        <div className="tile">
+                          <span className="tile-lbl">Issued</span>
+                          <span className="tile-val">
+                            {payroll ? formatAmount(payroll.issued) : '…'}
+                          </span>
+                        </div>
+                        <div className="tile accent">
+                          <span className="tile-lbl">Remaining</span>
+                          <span className="tile-val">
+                            {payroll
+                              ? formatAmount(
+                                  payroll.funded > payroll.issued
+                                    ? payroll.funded - payroll.issued
+                                    : 0n,
+                                )
+                              : '…'}
+                          </span>
                         </div>
                       </div>
-                      {payroll && (
-                        <div className="payroll-chips">
-                          <div className="chip">
-                            <span className="chip-lbl">Funded</span>
-                            <span className="chip-val">{formatAmount(payroll.funded)}</span>
-                          </div>
-                          <div className="chip">
-                            <span className="chip-lbl">Issued</span>
-                            <span className="chip-val">{formatAmount(payroll.issued)}</span>
-                          </div>
-                          {payroll.funded === 0n && payroll.issued === 0n ? (
-                            <div className="chip muted-chip">Not started</div>
-                          ) : alreadyPaid ? (
-                            <div className="chip ok-chip">Paid ✓</div>
-                          ) : (
-                            <div className="chip warn-chip">Partial</div>
-                          )}
-                          {payroll.funded > payroll.issued && (
-                            <div
-                              className="chip remain-chip"
-                              title="Offered to you when you start the next period"
-                            >
-                              <span className="chip-lbl">Remaining</span>
-                              <span className="chip-val">
-                                {formatAmount(payroll.funded - payroll.issued)}
-                              </span>
-                            </div>
-                          )}
-                        </div>
-                      )}
                       {breakdownParts.length > 0 && (
                         <p className="fund-break">Pool: {breakdownParts.join(' · ')}</p>
                       )}
@@ -1447,8 +1427,7 @@ function App() {
                         <div className="emp-head">
                           <span>Name</span>
                           <span>Wallet</span>
-                          <span>Salary</span>
-                          <span>Role</span>
+                          <span className="emp-hsalary">Salary</span>
                           <span />
                         </div>
                         {selected.employees.map((e) =>
@@ -1507,10 +1486,12 @@ function App() {
                             </div>
                           ) : (
                             <div className="emp-row" key={e.id}>
-                              <span className="emp-name">{e.name}</span>
+                              <span className="emp-name">
+                                {e.name}
+                                {e.role && <em className="emp-role">{e.role}</em>}
+                              </span>
                               <code className="emp-addr">{shortAddress(e.address, 8)}</code>
-                              <span>{e.salary || '—'}</span>
-                              <span>{e.role || '—'}</span>
+                              <span className="emp-salary">{e.salary || '—'}</span>
                               <span className="emp-actions">
                                 <button
                                   className="icon-btn edit"
@@ -1527,32 +1508,53 @@ function App() {
                           ),
                         )}
                       </div>
-                      <div className="emp-form">
-                        <input
-                          value={employeeForm.name}
-                          onChange={(e) => setEmployeeForm({ ...employeeForm, name: e.target.value })}
-                          placeholder="Name"
-                        />
-                        <input
-                          value={employeeForm.address}
-                          onChange={(e) => setEmployeeForm({ ...employeeForm, address: e.target.value })}
-                          placeholder="Wallet (Aztec address)"
-                          spellCheck={false}
-                        />
-                        <input
-                          value={employeeForm.salary}
-                          onChange={(e) => setEmployeeForm({ ...employeeForm, salary: e.target.value })}
-                          placeholder="Salary (1200.00)"
-                        />
-                        <input
-                          value={employeeForm.role}
-                          onChange={(e) => setEmployeeForm({ ...employeeForm, role: e.target.value })}
-                          placeholder="Role (optional)"
-                        />
-                        <button className="btn small" onClick={addEmployee}>
-                          Add employee
+                      {showAddEmployee ? (
+                        <div className="emp-form open">
+                          <input
+                            value={employeeForm.name}
+                            onChange={(e) => setEmployeeForm({ ...employeeForm, name: e.target.value })}
+                            placeholder="Name"
+                            autoFocus
+                          />
+                          <input
+                            value={employeeForm.address}
+                            onChange={(e) => setEmployeeForm({ ...employeeForm, address: e.target.value })}
+                            placeholder="Wallet (Aztec address)"
+                            spellCheck={false}
+                          />
+                          <input
+                            value={employeeForm.salary}
+                            onChange={(e) => setEmployeeForm({ ...employeeForm, salary: e.target.value })}
+                            placeholder="Salary (1200.00)"
+                          />
+                          <input
+                            value={employeeForm.role}
+                            onChange={(e) => setEmployeeForm({ ...employeeForm, role: e.target.value })}
+                            placeholder="Role (optional)"
+                          />
+                          <div className="emp-form-actions">
+                            <button className="btn small primary" onClick={addEmployee}>
+                              Add employee
+                            </button>
+                            <button
+                              className="btn small ghost"
+                              onClick={() => {
+                                setShowAddEmployee(false);
+                                setEmployeeForm({ name: '', address: '', salary: '', role: '' });
+                              }}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          className="add-employee-btn"
+                          onClick={() => setShowAddEmployee(true)}
+                        >
+                          + Add employee
                         </button>
-                      </div>
+                      )}
                     </div>
 
                     <div className="card">
@@ -1659,7 +1661,7 @@ function App() {
                               ? 'Proved fully paid ✓'
                               : 'Prove fully paid'}
                         </button>
-                        {payrollShortfall !== null && (
+                        {payrollShortfall !== null ? (
                           <div className="pay-note">
                             <span className="pay-note-dot" />
                             {formatAmount(currentPayroll!.funded)} funded of{' '}
@@ -1667,40 +1669,35 @@ function App() {
                             <strong>{formatAmount(payrollShortfall)}</strong> more to unlock
                             payment — the Fund button covers exactly this
                           </div>
-                        )}
-                        {payrollShortfall === null &&
-                          !fundedOk &&
+                        ) : !fundedOk &&
                           activeEmployees.length > 0 &&
-                          salaryTotal > 0n && (
-                            <div className="pay-note pending">
-                              <span className="pay-note-dot" />
-                              Checking on-chain funding…
-                            </div>
-                          )}
-                        {fundedOk && (
-                          <div className="pay-note ok">
+                          salaryTotal > 0n ? (
+                          <div className="pay-note pending">
                             <span className="pay-note-dot" />
-                            Fully funded · ready to pay {formatAmount(salaryTotal)}
+                            Checking on-chain funding…
                           </div>
-                        )}
-                        {alreadyPaid && (
-                          <div className="pay-note ok">
-                            <span className="pay-note-dot" />
-                            Everyone paid ✓ — ready to prove fully paid
-                          </div>
-                        )}
-                        {isProved && (
+                        ) : isProved ? (
                           <div className="pay-note ok">
                             <span className="pay-note-dot" />
                             ZK proof passed ✓ — you can start the next period
                           </div>
-                        )}
+                        ) : alreadyPaid ? (
+                          <div className="pay-note ok">
+                            <span className="pay-note-dot" />
+                            Everyone paid ✓ — ready to prove fully paid
+                          </div>
+                        ) : fundedOk ? (
+                          <div className="pay-note ok">
+                            <span className="pay-note-dot" />
+                            Fully funded · ready to pay {formatAmount(salaryTotal)}
+                          </div>
+                        ) : null}
                       </div>
                     </div>
                   </>
                 )}
 
-                <details className="card epoch-history" open={epochHistory.length > 0}>
+                <details className="card quiet epoch-history" open={epochHistory.length > 0}>
                   <summary>Period history ({epochHistory.length})</summary>
                   {epochHistory.length === 0 ? (
                     <p className="muted">No periods yet. Fund and run your first payroll.</p>
@@ -1743,6 +1740,42 @@ function App() {
                       })}
                     </div>
                   )}
+                </details>
+
+                <details className="card quiet tx-history">
+                  <summary>Transaction history ({txHistory.length})</summary>
+                  <div className="tx-list">
+                    {txHistory.length === 0 && (
+                      <p className="muted">No transactions yet. Fund, pay, or prove to see them here.</p>
+                    )}
+                    {txHistory.map((r) => (
+                      <div className="tx-row" key={r.id}>
+                        <span className={`tx-badge ${r.action}`}>
+                          {r.action === 'fund' ? 'F' : r.action === 'pay' ? 'P' : '✓'}
+                        </span>
+                        <span className="tx-label">{r.label}</span>
+                        <span
+                          className="tx-hash"
+                          title={`${r.hash} · ${r.time}`}
+                          onClick={() => copyText(r.hash, 'Tx hash')}
+                        >
+                          {shortAddress(r.hash, 8)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+
+                <details className="card quiet log">
+                  <summary>Session activity</summary>
+                  <div className="log-inner" ref={logRef}>
+                    {log.map((l, i) => (
+                      <div className={`log-line${l.err ? ' err' : ''}`} key={i}>
+                        <span className="time">{l.time}</span>
+                        {l.text}
+                      </div>
+                    ))}
+                  </div>
                 </details>
               </div>
             </div>

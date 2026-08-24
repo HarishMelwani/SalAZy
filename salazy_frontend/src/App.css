@@ -145,6 +145,10 @@ body::after {
   gap: 10px;
 }
 
+.top-right .tabs {
+  margin-bottom: 0;
+}
+
 .status {
   display: flex;
   align-items: center;
@@ -437,8 +441,8 @@ body::after {
   flex: 1;
   display: flex;
   flex-direction: column;
-  padding: 20px 26px 44px;
-  max-width: 1180px;
+  padding: 26px 30px 56px;
+  max-width: 1240px;
   width: 100%;
   margin: 0 auto;
 }
@@ -451,7 +455,6 @@ body::after {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 999px;
-  width: max-content;
   backdrop-filter: blur(12px);
 }
 
@@ -476,8 +479,8 @@ body::after {
 
 .dashboard {
   display: grid;
-  grid-template-columns: 300px 1fr;
-  gap: 18px;
+  grid-template-columns: 276px 1fr;
+  gap: 20px;
   align-items: start;
 }
 
@@ -485,7 +488,7 @@ body::after {
 .main-col {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 18px;
   min-width: 0;
 }
 
@@ -547,15 +550,8 @@ body::after {
   margin-left: auto;
 }
 
-.card.head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  flex-wrap: wrap;
-}
-
-.card.head .card-title {
+/* Period hero title: serif italic, like the brand voice. */
+.period-hero .card-title {
   font-family: var(--serif);
   font-style: italic;
   font-size: 26px;
@@ -565,7 +561,7 @@ body::after {
   margin-bottom: 4px;
 }
 
-.card.head .card-title::before {
+.period-hero .card-title::before {
   display: none;
 }
 
@@ -824,7 +820,14 @@ code {
   overflow: hidden;
 }
 
-.log summary {
+/* Quiet collapsible panels (period history / tx history / activity). */
+details.card.quiet {
+  padding: 0;
+  overflow: hidden;
+  box-shadow: none;
+}
+
+details.card.quiet > summary {
   padding: 13px 18px;
   cursor: pointer;
   font-family: var(--mono);
@@ -833,6 +836,26 @@ code {
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--muted);
+  user-select: none;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+details.card.quiet > summary::-webkit-details-marker {
+  display: none;
+}
+
+details.card.quiet > summary::after {
+  content: '›';
+  margin-left: auto;
+  font-size: 14px;
+  transition: transform 0.15s ease;
+}
+
+details.card.quiet[open] > summary::after {
+  transform: rotate(90deg);
 }
 
 .log-inner {
@@ -1079,62 +1102,95 @@ code {
   line-height: 1.55;
 }
 
-.payroll-chips {
+/* Period hero: business name + period pill + big stat tiles. */
+.period-hero .ph-top {
   display: flex;
-  gap: 8px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
   flex-wrap: wrap;
 }
 
-.chip {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  padding: 8px 15px;
-  border-radius: 12px;
-  min-width: 78px;
-}
-
-.chip-lbl {
+.status-pill {
   font-family: var(--mono);
-  font-size: 9.5px;
+  font-size: 11px;
+  font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
   color: var(--muted);
+  white-space: nowrap;
+  margin-top: 4px;
 }
 
-.chip-val {
-  font-family: var(--serif);
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--cream);
+.status-pill.idle {
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.04);
 }
 
-.ok-chip {
-  justify-content: center;
-  color: var(--cyan);
-  border-color: rgba(25, 211, 255, 0.5);
-  background: rgba(25, 211, 255, 0.08);
-}
-
-.warn-chip {
-  justify-content: center;
+.status-pill.partial {
   color: var(--rose);
   border-color: rgba(255, 138, 122, 0.5);
   background: rgba(255, 138, 122, 0.1);
 }
 
-.muted-chip {
-  justify-content: center;
+.status-pill.paid {
+  color: var(--cyan);
+  border-color: rgba(25, 211, 255, 0.5);
+  background: rgba(25, 211, 255, 0.08);
+}
+
+.status-pill.proved {
+  color: #9dff5e;
+  border-color: rgba(157, 255, 94, 0.45);
+  background: rgba(157, 255, 94, 0.08);
+}
+
+.stat-tiles {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 15px 17px;
+  min-width: 0;
+}
+
+.tile-lbl {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
   color: var(--muted);
 }
 
-.remain-chip {
-  justify-content: center;
-  color: var(--violet);
-  border-color: rgba(124, 92, 255, 0.5);
-  background: rgba(124, 92, 255, 0.1);
+.tile-val {
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 23px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--cream);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tile.accent .tile-val {
+  background: var(--grad-text);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 
 .emp-table {
@@ -1147,7 +1203,7 @@ code {
 .emp-head,
 .emp-row {
   display: grid;
-  grid-template-columns: 1.2fr 1.6fr 0.8fr 1fr 32px;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1.1fr) 92px 64px;
   gap: 10px;
   align-items: center;
 }
@@ -1176,27 +1232,86 @@ code {
 
 .emp-name {
   font-weight: 600;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.emp-role {
+  font-style: normal;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .emp-addr {
   font-size: 11px;
 }
 
-.emp-form {
+.emp-salary {
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 16px;
+  color: var(--cream);
+}
+
+.add-employee-btn {
+  width: 100%;
+  background: transparent;
+  border: 1.5px dashed var(--line-strong);
+  border-radius: 12px;
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: 13.5px;
+  font-weight: 700;
+  padding: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.add-employee-btn:hover {
+  border-color: var(--violet);
+  color: var(--cream);
+  background: rgba(124, 92, 255, 0.07);
+}
+
+.emp-form.open {
   display: grid;
-  grid-template-columns: 1fr 1.6fr 1fr 1fr auto;
+  grid-template-columns: 1fr 1fr;
+  gap: 9px;
+}
+
+.emp-form.open input:nth-of-type(2) {
+  grid-column: 1 / -1;
+}
+
+.emp-form-actions {
+  grid-column: 1 / -1;
+  display: flex;
   gap: 8px;
+  margin-top: 2px;
+}
+
+.btn.ghost {
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  color: var(--muted);
 }
 
 .payroll-actions {
   display: flex;
-  flex-direction: column;
+  flex-wrap: wrap;
   gap: 11px;
 }
 
 .payroll-actions .btn.primary {
-  font-size: 16px;
-  padding: 14px 24px;
+  flex: 1 1 200px;
+  font-size: 15.5px;
+  padding: 14px 20px;
 }
 
 .pay-note {
@@ -1214,16 +1329,6 @@ code {
 
 .pay-note strong {
   color: var(--cream);
-}
-
-.pay-fill {
-  margin-left: auto;
-  font-family: var(--mono);
-  font-size: 10.5px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  opacity: 0.85;
-  white-space: nowrap;
 }
 
 .pay-note.ok {
@@ -1401,8 +1506,8 @@ code {
     grid-template-columns: 1fr;
   }
 
-  .emp-form {
-    grid-template-columns: 1fr 1fr;
+  .emp-form.open {
+    grid-template-columns: 1fr;
   }
 
   .emp-head {
@@ -1410,7 +1515,29 @@ code {
   }
 
   .emp-row {
-    grid-template-columns: 1fr 1fr auto;
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      'name actions'
+      'addr salary';
+    row-gap: 6px;
+    padding: 12px 14px;
+  }
+
+  .emp-row > .emp-name {
+    grid-area: name;
+  }
+
+  .emp-row > .emp-addr {
+    grid-area: addr;
+  }
+
+  .emp-row > .emp-salary {
+    grid-area: salary;
+    text-align: right;
+  }
+
+  .emp-row > .emp-actions {
+    grid-area: actions;
   }
 
   .status {
@@ -1418,6 +1545,8 @@ code {
   }
 
   .topbar {
+    flex-wrap: wrap;
+    gap: 10px;
     padding: 12px 18px;
   }
 
@@ -1425,8 +1554,28 @@ code {
     padding: 16px 18px 36px;
   }
 }
+
+@media (max-width: 700px) {
+  .payroll-actions .btn.primary {
+    flex-basis: 100%;
+  }
+
+  .top-right {
+    width: 100%;
+    justify-content: space-between;
+  }
+}
+
+@media (max-width: 520px) {
+  .stat-tiles {
+    grid-template-columns: 1fr;
+  }
+
+  .tile-val {
+    font-size: 20px;
+  }
+}
 /* Fresh-deploy notice: the tab kept running while a new version shipped. */
-/* Where the period's funding came from (rollover vs top-ups). */
 .fund-break {
   font-size: 12px;
   color: var(--muted);
