@@ -87,6 +87,8 @@ type EpochRecord = {
   funded: bigint;
   issued: bigint;
   proved: boolean;
+  /** Local planned figure, used when the ledger has merged this period away. */
+  localIssued?: bigint;
 };
 
 type LogLine = { time: string; text: string; err?: boolean };
@@ -507,19 +509,31 @@ function App() {
     const records: EpochRecord[] = [];
     const startEpoch = Math.max(1, selected.epoch - 20);
     for (let e = selected.epoch; e >= startEpoch; e--) {
+      // The deployed ledger merges finished periods into the newest one, so
+      // old epochs legitimately read 0 on-chain. Keep the local planned
+      // figure so history still shows what actually happened.
+      const periodKeyHist = `${selected.id}:${e}`;
+      const plannedRaw = plannedTotals[periodKeyHist];
+      const localIssued = plannedRaw !== undefined ? BigInt(plannedRaw) : 0n;
       try {
         const [funded, issued] = await Promise.all([
           viewFunding(employer.contract, employer.address, company, BigInt(e)),
           viewIssued(employer.contract, employer.address, company, BigInt(e)),
         ]);
-        const proved = !!provedEpochs[`${selected.id}:${e}`];
-        records.push({ epoch: e, funded, issued, proved });
+        const proved = !!provedEpochs[periodKeyHist];
+        records.push({ epoch: e, funded, issued, proved, localIssued });
       } catch {
-        records.push({ epoch: e, funded: 0n, issued: 0n, proved: false });
+        records.push({
+          epoch: e,
+          funded: 0n,
+          issued: 0n,
+          proved: !!provedEpochs[periodKeyHist],
+          localIssued,
+        });
       }
     }
     setEpochHistory(records);
-  }, [employer, selected, provedEpochs]);
+  }, [employer, selected, provedEpochs, plannedTotals]);
 
   const refreshEmployee = useCallback(async () => {
     if (!employee) return;
@@ -1704,10 +1718,20 @@ function App() {
                   ) : (
                     <div className="epoch-list">
                       {epochHistory.map((rec) => {
-                        const status = rec.issued === 0n && rec.funded === 0n
-                          ? 'not-started'
-                          : rec.proved
-                            ? 'proved'
+                        // Proved status comes from the local record and wins
+                        // over everything; a merged-away period (chain reads
+                        // 0 but we know it was paid) still shows as paid.
+                        const archived =
+                          rec.funded === 0n &&
+                          rec.issued === 0n &&
+                          rec.localIssued !== undefined &&
+                          rec.localIssued > 0n;
+                        const status = rec.proved
+                          ? 'proved'
+                          : rec.issued === 0n && rec.funded === 0n
+                            ? archived
+                              ? 'paid'
+                              : 'not-started'
                             : rec.issued > 0n
                               ? 'paid'
                               : 'funded';
@@ -1729,9 +1753,17 @@ function App() {
                                 Period #{rec.epoch}
                                 {rec.epoch === selected?.epoch ? ' · current' : ''}
                               </span>
-                              <span className="epoch-meta">
-                                issued {formatAmount(rec.issued)} · funded{' '}
-                                {formatAmount(rec.funded)}
+                              <span
+                                className="epoch-meta"
+                                title={
+                                  archived
+                                    ? 'This period is closed; the private ledger keeps only the newest period, so this row shows your local payment record.'
+                                    : undefined
+                                }
+                              >
+                                {archived
+                                  ? `paid ${formatAmount(rec.localIssued!)} · local record`
+                                  : `issued ${formatAmount(rec.issued)} · funded ${formatAmount(rec.funded)}`}
                               </span>
                             </span>
                             <span className={`epoch-status ${status}`}>{label}</span>

@@ -233,3 +233,39 @@ unconstrained fn prove_fully_paid_survives_many_notes_across_repeated_funding_an
     // combined ledger would previously have held many notes.
     env.call_private(alice, SalAZy::at(contract_address).prove_fully_paid(1, 4, 900));
 }
+
+// KNOWN LIMITATION (found 2026-08-22 via user report "old periods show
+// Not started"): the aggregated-ledger design does not keep history across
+// epochs on THIS deployed contract. A later fund()/add_issuance() pulls the
+// prior periods' notes into the newest epoch, so only the latest period
+// reports non-zero totals. Current-period math stays correct (the newest
+// period holds the cumulative totals, so proving still works and no value is
+// lost) - but per-period HISTORY is not retrievable from the ledger. The
+// frontend therefore keeps period history from its local records. This test
+// pins the behaviour so a future contract upgrade that fixes per-epoch
+// scoping flips it to the strict per-epoch assertions above.
+#[test]
+unconstrained fn known_limit_ledger_merges_across_epochs() {
+    let (env, contract_address, alice, _bob) = setup();
+
+    // Period 1: fund 500, pay 100.
+    env.call_private(alice, SalAZy::at(contract_address).fund(7, 1, 500));
+    env.call_private(alice, SalAZy::at(contract_address).issue_salary(7, 1, alice, 100, 1));
+
+    let ep1_funded_before =
+        env.execute_utility(SalAZy::at(contract_address).view_funding(alice, 7, 1));
+    assert_eq(ep1_funded_before, 500);
+
+    // Period 2 activity absorbs period 1's ledger entries.
+    env.call_private(alice, SalAZy::at(contract_address).fund(7, 2, 400));
+    env.call_private(alice, SalAZy::at(contract_address).issue_salary(7, 2, alice, 400, 1));
+
+    let ep1_funded = env.execute_utility(SalAZy::at(contract_address).view_funding(alice, 7, 1));
+    assert_eq(ep1_funded, 0);
+    let ep1_issued = env.execute_utility(SalAZy::at(contract_address).view_issued(alice, 7, 1));
+    assert_eq(ep1_issued, 0);
+
+    // The newest epoch carries the cumulative totals (400 + absorbed 500).
+    let ep2_funded = env.execute_utility(SalAZy::at(contract_address).view_funding(alice, 7, 2));
+    assert_eq(ep2_funded, 900);
+}
