@@ -1238,6 +1238,17 @@ code {
   border-color: var(--line);
 }
 
+.pay-note.warn {
+  color: #ffb84d;
+  background: rgba(255, 184, 77, 0.08);
+  border-color: rgba(255, 184, 77, 0.45);
+}
+
+.backup-note {
+  width: min(860px, calc(100% - 32px));
+  margin: 0 auto 10px;
+}
+
 .pay-note-dot {
   width: 8px;
   height: 8px;

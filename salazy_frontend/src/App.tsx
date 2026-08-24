@@ -38,7 +38,25 @@ const PAID_KEY = 'salazy.paid.v1';
 const PLANNED_KEY = 'salazy.planned.v1';
 const ROLLOVER_KEY = 'salazy.rollover.v1';
 const TOPUPS_KEY = 'salazy.topups.v1';
+/** Records the address whose backup file was downloaded (nudge dismiss). */
+const BACKUP_KEY = 'salazy.backup.v1';
 const TX_HISTORY_MAX = 20;
+
+function backupHeld(address: string): boolean {
+  try {
+    return localStorage.getItem(BACKUP_KEY) === address;
+  } catch {
+    return false;
+  }
+}
+
+function markBackupHeld(address: string) {
+  try {
+    localStorage.setItem(BACKUP_KEY, address);
+  } catch {
+    /* storage unavailable */
+  }
+}
 
 type EmployeeRow = {
   id: string;
@@ -208,6 +226,10 @@ function App() {
   const [paychecks, setPaychecks] = useState<SalaryNote[]>([]);
   const [balance, setBalance] = useState<bigint>(0n);
   const [busy, setBusy] = useState<string>('');
+  /** Batch progress while "Pay everyone" runs (done batches / total). */
+  const [payProgress, setPayProgress] = useState<{ done: number; total: number } | null>(null);
+  /** True until the current account's backup file has been downloaded. */
+  const [needsBackup, setNeedsBackup] = useState(false);
   const [log, setLog] = useState<LogLine[]>([]);
   const [toast, setToast] = useState<string>('');
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -347,6 +369,9 @@ function App() {
       const contract = await attachToSalAZy(wallet);
       setEmployer({ address: account.address, contract });
       setEmployee({ address: account.address, contract });
+      // Fresh accounts (and resumed ones without a recorded download) get the
+      // backup nudge until they actually export their keys.
+      setNeedsBackup(!backupHeld(account.address.toString()));
       addLog(`Wallet ready ${shortAddress(account.address.toString())}`);
       setStatus('Ready');
     } catch (err) {
@@ -395,6 +420,8 @@ function App() {
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
+      markBackupHeld(employer.address.toString());
+      setNeedsBackup(false);
       addLog('Backup downloaded — keep this file somewhere safe');
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -435,6 +462,9 @@ function App() {
         const contract = await attachToSalAZy(wallet);
         setEmployer({ address, contract });
         setEmployee({ address, contract });
+        // They demonstrably hold a backup file (they just imported from one).
+        markBackupHeld(address.toString());
+        setNeedsBackup(false);
         addLog(`Wallet restored ${shortAddress(address.toString())}`);
         setStatus('Ready');
       } catch (err) {
@@ -809,7 +839,15 @@ function App() {
         return;
       }
     }
+    const unpaidTotal = rows.reduce((s, e) => s + (parseAmount(e.salary) ?? 0n), 0n);
+    const batchCount = Math.ceil(rows.length / MAX_EMPLOYEES_PER_PAYRUN);
+    const confirmed = window.confirm(
+      `Pay ${rows.length} employee${rows.length === 1 ? '' : 's'} · ${formatAmount(unpaidTotal)} total\n\n` +
+        `Amounts stay private. This sends ${batchCount} transaction${batchCount === 1 ? '' : 's'}.`,
+    );
+    if (!confirmed) return;
     setBusy('pay');
+    setPayProgress({ done: 0, total: batchCount });
     setError('');
     try {
       const company = fieldFromString(selected.companyId);
@@ -829,6 +867,7 @@ function App() {
       const hashes: string[] = [];
       for (let b = 0; b < batches.length; b++) {
         const batch = batches[b];
+        setPayProgress({ done: b, total: batches.length });
         addLog(
           `Paying batch ${b + 1}/${batches.length} (${batch.length} employee${batch.length === 1 ? '' : 's'})…`,
         );
@@ -872,6 +911,7 @@ function App() {
       addLog(`Payroll error: ${msg}`, true);
     } finally {
       setBusy('');
+      setPayProgress(null);
     }
   }, [
     employer,
@@ -884,6 +924,62 @@ function App() {
     alreadyPaid,
     periodKey,
     paidEmployees,
+  ]);
+
+  /** Exports a shareable JSON report for the current period (no amounts of
+   * individual employees — only period totals + tx hashes). */
+  const handleExportReport = useCallback(() => {
+    if (!selected || !currentPayroll) {
+      setError('Payroll is still loading — try again in a moment');
+      return;
+    }
+    const paidSet = new Set(paidEmployees[periodKey] ?? []);
+    const plannedRaw = plannedTotals[periodKey];
+    const epochTag = `epoch ${selected.epoch}`;
+    const carryTag = `from period ${selected.epoch - 1}`;
+    const transactions = txHistory
+      .filter((r) => r.label.includes(epochTag) || r.label.includes(carryTag))
+      .map((r) => ({ action: r.action, label: r.label, hash: r.hash, time: r.time }));
+    const report = {
+      format: 'salazy-period-report' as const,
+      version: 1,
+      company: selected.name,
+      period: selected.epoch,
+      generatedAt: new Date().toISOString(),
+      headcount: activeEmployees.length,
+      employeesPaidThisPeriod: paidSet.size,
+      plannedTotal: plannedRaw !== undefined ? formatAmount(BigInt(plannedRaw)) : null,
+      fundedOnChain: formatAmount(currentPayroll.funded),
+      issuedOnChain: formatAmount(currentPayroll.issued),
+      provedFullyPaid: isProved,
+      note: 'Individual salaries are private notes; only these period totals and transaction hashes are verifiable on-chain.',
+      transactions,
+    };
+    const blob = new Blob([JSON.stringify(report, null, 2)], {
+      type: 'application/json',
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const safeName = selected.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+    a.download = `salazy-report-${safeName}-p${selected.epoch}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    addLog(
+      `Period report exported (${report.transactions.length} tx hash${report.transactions.length === 1 ? '' : 'es'})`,
+    );
+    showToast('Report downloaded ✓');
+  }, [
+    selected,
+    currentPayroll,
+    activeEmployees,
+    paidEmployees,
+    periodKey,
+    plannedTotals,
+    isProved,
+    txHistory,
   ]);
 
   const handleNextPeriod = useCallback(() => {
@@ -1084,6 +1180,19 @@ function App() {
       />
 
       {error && <div className="error">{error}</div>}
+
+      {connected && needsBackup && (
+        <div className="pay-note warn backup-note">
+          <span className="pay-note-dot" />
+          <span>
+            Your company ledger lives only in this browser. Download your
+            backup file — it is the only way to restore this account.
+          </span>
+          <button className="btn small" onClick={handleBackup}>
+            Download backup
+          </button>
+        </div>
+      )}
 
       {!connected && !connecting && !status && (
         <section className="hero">
@@ -1449,18 +1558,28 @@ function App() {
                     <div className="card">
                       <div className="card-title head-row">
                         <span>Payroll · epoch {selected.epoch}</span>
-                        <button
-                          className="btn small"
-                          onClick={handleNextPeriod}
-                          disabled={busy !== '' || !isProved}
-                          title={
-                            isProved
-                              ? 'Start the next pay period'
-                              : 'Prove this period fully paid first'
-                          }
-                        >
-                          {isProved ? 'Next period ›' : '🔒 Next period ›'}
-                        </button>
+                        <div className="row">
+                          <button
+                            className="btn small"
+                            onClick={handleExportReport}
+                            disabled={busy !== '' || !currentPayroll}
+                            title="Download a shareable JSON report: period totals, proved status and tx hashes — individual salaries stay private"
+                          >
+                            ⤓ Report
+                          </button>
+                          <button
+                            className="btn small"
+                            onClick={handleNextPeriod}
+                            disabled={busy !== '' || !isProved}
+                            title={
+                              isProved
+                                ? 'Start the next pay period'
+                                : 'Prove this period fully paid first'
+                            }
+                          >
+                            {isProved ? 'Next period ›' : '🔒 Next period ›'}
+                          </button>
+                        </div>
                       </div>
                       {showCarryOver && (
                         <div className="pay-note carry">
@@ -1515,7 +1634,9 @@ function App() {
                           }
                         >
                           {busy === 'pay'
-                            ? 'Paying everyone…'
+                            ? payProgress && payProgress.total > 1
+                              ? `Paying batch ${Math.min(payProgress.done + 1, payProgress.total)}/${payProgress.total}…`
+                              : 'Paying everyone…'
                             : alreadyPaid
                               ? 'Already paid ✓'
                               : payrollShortfall !== null

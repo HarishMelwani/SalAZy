@@ -116,6 +116,8 @@ export async function createWallet({
 
 export interface CreateSessionAccountResult {
   address: import('@aztec/aztec.js/addresses').AztecAddress;
+  /** True when a brand-new account was minted (vs resumed from the DB). */
+  fresh: boolean;
 }
 
 /** Remembers which identity to resume when several exist in the wallet DB. */
@@ -157,7 +159,7 @@ export async function createSessionAccount(
       : undefined;
     const address = (match ?? existing[0]).item;
     rememberActiveAccount(address);
-    return { address };
+    return { address, fresh: false };
   }
   const account = await wallet.createSchnorrInitializerlessAccount(
     Fr.random(),
@@ -165,7 +167,7 @@ export async function createSessionAccount(
     Fq.random(),
   );
   rememberActiveAccount(account.address);
-  return { address: account.address };
+  return { address: account.address, fresh: true };
 }
 
 // ---------------------------------------------------------------------------
