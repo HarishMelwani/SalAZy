@@ -90,10 +90,27 @@ export async function fund(
   company: Fr,
   epoch: bigint,
   amount: bigint,
+  totalHint: bigint,
+  saltHint: Fr,
 ): Promise<string> {
   const paymentMethod = await feeMethod();
   const result = await contract.methods
-    .fund(company, epoch, amount)
+    .fund(company, epoch, amount, totalHint, saltHint)
+    .send({ from, fee: { paymentMethod } });
+  return result.receipt.txHash.toString();
+}
+
+/** Pulls back unused funding from a period (private). */
+export async function defund(
+  contract: SalAZyContract,
+  from: AztecAddress,
+  company: Fr,
+  epoch: bigint,
+  amount: bigint,
+): Promise<string> {
+  const paymentMethod = await feeMethod();
+  const result = await contract.methods
+    .defund(company, epoch, amount)
     .send({ from, fee: { paymentMethod } });
   return result.receipt.txHash.toString();
 }
@@ -137,13 +154,36 @@ export async function proveFullyPaid(
   from: AztecAddress,
   company: Fr,
   epoch: bigint,
-  total: bigint,
 ): Promise<string> {
   const paymentMethod = await feeMethod();
   const result = await contract.methods
-    .prove_fully_paid(company, epoch, total)
+    .prove_fully_paid(company, epoch)
     .send({ from, fee: { paymentMethod } });
   return result.receipt.txHash.toString();
+}
+
+/** Declared payroll budget for a period (private view; 0 when undeclared). */
+export async function viewCommittedTotal(
+  contract: SalAZyContract,
+  owner: AztecAddress,
+  company: Fr,
+  epoch: bigint,
+): Promise<bigint> {
+  const sim = await contract.methods
+    .view_committed_total(owner, company, epoch)
+    .simulate({ from: owner });
+  return BigInt((sim.result as Fr).toString());
+}
+
+/** PUBLIC proved seal for a period - readable by anyone, no keys needed. */
+export async function viewProved(
+  contract: SalAZyContract,
+  from: AztecAddress,
+  company: Fr,
+  epoch: bigint,
+): Promise<boolean> {
+  const sim = await contract.methods.view_proved(company, epoch).simulate({ from });
+  return sim.result as boolean;
 }
 
 export async function viewFunding(

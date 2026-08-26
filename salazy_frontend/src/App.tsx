@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AztecAddress } from '@aztec/aztec.js/addresses';
+import { Fr } from '@aztec/aztec.js/fields';
 import type { EmbeddedWallet } from '@aztec/wallets/embedded';
 import type { SalAZyContract } from './generated/SalAZy';
 import { registerSponsoredFPC } from './fees';
@@ -24,8 +25,10 @@ import {
   textFitsField,
   viewBalance,
   viewBalanceNotes,
+  viewCommittedTotal,
   viewFunding,
   viewIssued,
+  viewProved,
   type EmployeeInput,
   type SalaryNote,
 } from './salazy';
@@ -33,11 +36,9 @@ import './App.css';
 
 const STORAGE_KEY = 'salazy.businesses.v1';
 const TX_HISTORY_KEY = 'salazy.txhistory.v1';
-const PROVED_KEY = 'salazy.proved.v1';
+/** v2 contract: period truth lives on-chain; wipe legacy local ledgers. */
+const SCHEMA_KEY = 'salazy.schema.v2';
 const PAID_KEY = 'salazy.paid.v1';
-const PLANNED_KEY = 'salazy.planned.v1';
-const ROLLOVER_KEY = 'salazy.rollover.v1';
-const TOPUPS_KEY = 'salazy.topups.v1';
 /** Records the address whose backup file was downloaded (nudge dismiss). */
 const BACKUP_KEY = 'salazy.backup.v1';
 const TX_HISTORY_MAX = 20;
@@ -79,7 +80,12 @@ type Payroll = {
   epoch: string;
   funded: bigint;
   issued: bigint;
+  /** Declared payroll budget from the period's CommitNote (0 when undeclared). */
+  committed: bigint;
+  /** Mirror of the PRIVATE is_fully_paid view for the employer dashboard. */
   fullyPaid: boolean;
+  /** PUBLIC on-chain seal: this period was proved fully paid. */
+  proved: boolean;
 };
 
 type EpochRecord = {
@@ -87,8 +93,6 @@ type EpochRecord = {
   funded: bigint;
   issued: bigint;
   proved: boolean;
-  /** Local planned figure, used when the ledger has merged this period away. */
-  localIssued?: bigint;
 };
 
 type LogLine = { time: string; text: string; err?: boolean };
@@ -140,6 +144,34 @@ function recoverFromChunkLoadError(): boolean {
   window.location.reload();
   return true;
 }
+
+/**
+ * v2 contract upgrade: proved/committed state now lives ON CHAIN, so the old
+ * local ledger snapshots (proved/planned/rollover/topups) are obsolete and
+ * period counters restart at 1 against the fresh contract.
+ */
+function migrateToV2() {
+  try {
+    if (localStorage.getItem(SCHEMA_KEY) === 'v2') return;
+    for (const k of ['salazy.proved.v1', 'salazy.planned.v1', 'salazy.rollover.v1', 'salazy.topups.v1', 'salazy.paid.v1']) {
+      localStorage.removeItem(k);
+    }
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const list = JSON.parse(raw) as Business[];
+      if (Array.isArray(list)) {
+        localStorage.setItem(
+          STORAGE_KEY,
+          JSON.stringify(list.map((b) => ({ ...b, epoch: 1 }))),
+        );
+      }
+    }
+    localStorage.setItem(SCHEMA_KEY, 'v2');
+  } catch {
+    /* storage unavailable */
+  }
+}
+migrateToV2();
 
 function parseAmount(s: string): bigint | null {
   const m = /^(\d+)(?:\.(\d{1,2}))?$/.exec(s.trim());
@@ -247,31 +279,11 @@ function App() {
       return [];
     }
   });
-  const [provedEpochs, setProvedEpochs] = useState<Record<string, boolean>>(() => {
-    try {
-      const raw = localStorage.getItem(PROVED_KEY);
-      return raw ? (JSON.parse(raw) as Record<string, boolean>) : {};
-    } catch {
-      return {};
-    }
-  });
   // Employee ids already paid this period: a failed batch mid-payrun can be
-  // retried without paying anyone twice.
+  // retried without paying anyone twice. (v2: the ONLY local payroll ledger —
+  // proved/committed/issued truth lives on-chain.)
   const [paidEmployees, setPaidEmployees] = useState<Record<string, string[]>>(() =>
     loadJson<Record<string, string[]>>(PAID_KEY, {}),
-  );
-  // Cumulative amount actually sent for a period (decimal string). The ZK proof
-  // runs against this planned total instead of the on-chain issued amount.
-  const [plannedTotals, setPlannedTotals] = useState<Record<string, string>>(() =>
-    loadJson<Record<string, string>>(PLANNED_KEY, {}),
-  );
-  // Where a period's funding came from, for the breakdown under the Funded
-  // chip: rollovers keyed by TARGET period, manual top-ups by their period.
-  const [rollovers, setRollovers] = useState<Record<string, string>>(() =>
-    loadJson<Record<string, string>>(ROLLOVER_KEY, {}),
-  );
-  const [topups, setTopups] = useState<Record<string, string>>(() =>
-    loadJson<Record<string, string>>(TOPUPS_KEY, {}),
   );
 
   function addLog(text: string, err = false) {
@@ -311,35 +323,6 @@ function App() {
     });
   }
 
-  /** Adds to the period's planned total — what was actually sent on-chain. */
-  function addPlanned(key: string, amount: bigint) {
-    if (amount === 0n) return;
-    setPlannedTotals((p) => {
-      const next = { ...p, [key]: (BigInt(p[key] ?? '0') + amount).toString() };
-      persistJson(PLANNED_KEY, next);
-      return next;
-    });
-  }
-
-  /** Records how much was rolled INTO a period (breakdown display). */
-  function recordRollover(key: string, amount: bigint) {
-    if (amount === 0n) return;
-    setRollovers((p) => {
-      const next = { ...p, [key]: (BigInt(p[key] ?? '0') + amount).toString() };
-      persistJson(ROLLOVER_KEY, next);
-      return next;
-    });
-  }
-
-  /** Records a manual top-up made in a period (breakdown display). */
-  function recordTopup(key: string, amount: bigint) {
-    if (amount === 0n) return;
-    setTopups((p) => {
-      const next = { ...p, [key]: (BigInt(p[key] ?? '0') + amount).toString() };
-      persistJson(TOPUPS_KEY, next);
-      return next;
-    });
-  }
 
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
@@ -353,7 +336,8 @@ function App() {
   const connected = !!(employer && employee);
 
   const periodKey = selected ? `${selected.id}:${selected.epoch}` : '';
-  const isProved = periodKey ? !!provedEpochs[periodKey] : false;
+  /** v2: the proved seal is PUBLIC ON-CHAIN - no local record involved. */
+  const isProved = payroll?.proved ?? false;
 
   const saveBusiness = useCallback((next: Business[]) => {
     setBusinesses(next);
@@ -491,10 +475,14 @@ function App() {
       if (!employer) return;
       const company = fieldFromString(b.companyId);
       try {
-        const funded = await viewFunding(employer.contract, employer.address, company, BigInt(b.epoch));
-        const issued = await viewIssued(employer.contract, employer.address, company, BigInt(b.epoch));
-        const fullyPaid = await isFullyPaid(employer.contract, employer.address, company, BigInt(b.epoch));
-        setPayroll({ epoch: String(b.epoch), funded, issued, fullyPaid });
+        const [funded, issued, committed, fullyPaid, proved] = await Promise.all([
+          viewFunding(employer.contract, employer.address, company, BigInt(b.epoch)),
+          viewIssued(employer.contract, employer.address, company, BigInt(b.epoch)),
+          viewCommittedTotal(employer.contract, employer.address, company, BigInt(b.epoch)),
+          isFullyPaid(employer.contract, employer.address, company, BigInt(b.epoch)),
+          viewProved(employer.contract, employer.address, company, BigInt(b.epoch)).catch(() => false),
+        ]);
+        setPayroll({ epoch: String(b.epoch), funded, issued, committed, fullyPaid, proved });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         addLog(`Payroll view error: ${msg}`, true);
@@ -509,31 +497,21 @@ function App() {
     const records: EpochRecord[] = [];
     const startEpoch = Math.max(1, selected.epoch - 20);
     for (let e = selected.epoch; e >= startEpoch; e--) {
-      // The deployed ledger merges finished periods into the newest one, so
-      // old epochs legitimately read 0 on-chain. Keep the local planned
-      // figure so history still shows what actually happened.
-      const periodKeyHist = `${selected.id}:${e}`;
-      const plannedRaw = plannedTotals[periodKeyHist];
-      const localIssued = plannedRaw !== undefined ? BigInt(plannedRaw) : 0n;
+      // v2: per-period ledgers are scoped on-chain by design - every figure
+      // below comes straight from the contract. No local fallbacks.
       try {
-        const [funded, issued] = await Promise.all([
+        const [funded, issued, proved] = await Promise.all([
           viewFunding(employer.contract, employer.address, company, BigInt(e)),
           viewIssued(employer.contract, employer.address, company, BigInt(e)),
+          viewProved(employer.contract, employer.address, company, BigInt(e)).catch(() => false),
         ]);
-        const proved = !!provedEpochs[periodKeyHist];
-        records.push({ epoch: e, funded, issued, proved, localIssued });
+        records.push({ epoch: e, funded, issued, proved });
       } catch {
-        records.push({
-          epoch: e,
-          funded: 0n,
-          issued: 0n,
-          proved: !!provedEpochs[periodKeyHist],
-          localIssued,
-        });
+        records.push({ epoch: e, funded: 0n, issued: 0n, proved: false });
       }
     }
     setEpochHistory(records);
-  }, [employer, selected, provedEpochs, plannedTotals]);
+  }, [employer, selected]);
 
   const refreshEmployee = useCallback(async () => {
     if (!employee) return;
@@ -746,28 +724,6 @@ function App() {
     currentPayroll.funded > 0n &&
     currentPayroll.issued >= currentPayroll.funded;
 
-  const breakdownParts = useMemo(() => {
-    if (!currentPayroll || currentPayroll.funded === 0n) return [] as string[];
-    const parts: string[] = [];
-    const rolled = BigInt(rollovers[periodKey] ?? '0');
-    const topped = BigInt(topups[periodKey] ?? '0');
-    if (rolled > 0n) parts.push(`${formatAmount(rolled)} carried over`);
-    if (topped > 0n) parts.push(`${formatAmount(topped)} funded here`);
-    return parts;
-  }, [currentPayroll, rollovers, topups, periodKey]);
-
-  // Show the carry-over offer until the leftover has actually been moved.
-  // Unspent funding from the previous period, offered to carry into this one.
-  const prevEpochLeftover = useMemo(() => {
-    if (!selected || selected.epoch <= 1) return 0n;
-    const rec = epochHistory.find((r) => r.epoch === selected.epoch - 1);
-    if (!rec || rec.funded <= rec.issued) return 0n;
-    return rec.funded - rec.issued;
-  }, [selected, epochHistory]);
-
-  const showCarryOver =
-    prevEpochLeftover > 0n && BigInt(rollovers[periodKey] ?? '0') === 0n;
-
   /** Single status for the period hero pill: proved > paid > partial > idle. */
   const periodStatus: { cls: string; label: string } | null = (() => {
     if (!payroll) return null;
@@ -794,7 +750,29 @@ function App() {
       const company = fieldFromString(selected.companyId);
       // Exact funding: read FRESH on-chain funding right before sending, so
       // the tx is precisely the shortfall — never more, never less — even if
-      // the cached view is behind or a carry-over just landed.
+      // the cached view is behind.
+      // v2: the FIRST fund of a period declares its payroll budget on-chain
+      // (total + salt in a private CommitNote). Later top-ups inherit it and
+      // MUST pass zero hints.
+      let declaredHere = false;
+      try {
+        const freshCommitted = await viewCommittedTotal(
+          employer.contract,
+          employer.address,
+          company,
+          BigInt(selected.epoch),
+        );
+        declaredHere = freshCommitted === 0n;
+      } catch {
+        declaredHere = true;
+      }
+      if (!declaredHere && currentPayroll !== null && currentPayroll.committed > 0n && currentPayroll.committed !== salaryTotal) {
+        setError(
+          `This period's declared payroll is ${formatAmount(currentPayroll.committed)} but your employee list totals ${formatAmount(salaryTotal)} — the list was edited after funding. Start the next period to apply new salaries`,
+        );
+        addLog('Blocked: salary list no longer matches the declared budget', true);
+        return;
+      }
       const freshFunded = await viewFunding(
         employer.contract,
         employer.address,
@@ -808,10 +786,17 @@ function App() {
         return;
       }
       addLog(`Funding the exact shortfall for epoch ${selected.epoch}: ${formatAmount(needed)}…`);
-      const txHash = await fund(employer.contract, employer.address, company, BigInt(selected.epoch), needed);
+      const txHash = await fund(
+        employer.contract,
+        employer.address,
+        company,
+        BigInt(selected.epoch),
+        needed,
+        declaredHere ? salaryTotal : 0n,
+        declaredHere ? Fr.random() : new Fr(0n),
+      );
       addLog(`Funded ${formatAmount(needed)} for epoch ${selected.epoch} · tx ${shortAddress(txHash, 8)}`);
       recordTx('fund', `Fund ${formatAmount(needed)} (epoch ${selected.epoch})`, txHash);
-      recordTopup(periodKey, needed);
       setTimeout(() => refreshPayroll(selected), 4000);
     } catch (err) {
       if (isChunkLoadError(err) && recoverFromChunkLoadError()) return;
@@ -821,7 +806,7 @@ function App() {
     } finally {
       setBusy('');
     }
-  }, [employer, selected, refreshPayroll, periodKey, salaryTotal]);
+  }, [employer, selected, refreshPayroll, currentPayroll, salaryTotal]);
 
   const handlePayEveryone = useCallback(async () => {
     if (!employer || !selected) return;
@@ -911,10 +896,6 @@ function App() {
           periodKey,
           batch.map((x) => x.id),
         );
-        addPlanned(
-          periodKey,
-          batch.reduce((sum, x) => sum + x.input.amount, 0n),
-        );
         recordTx('pay', `Pay ${batch.length} (epoch ${selected.epoch}, batch ${b + 1})`, txHash);
       }
       addLog(
@@ -924,11 +905,6 @@ function App() {
       );
       showToast(`Paid ${rows.length} employee${rows.length === 1 ? '' : 's'} ✓`);
       setPayroll(null);
-      setProvedEpochs((p) => {
-        const next = { ...p, [periodKey]: false };
-        try { localStorage.setItem(PROVED_KEY, JSON.stringify(next)); } catch {}
-        return next;
-      });
       setTimeout(() => refreshPayroll(selected), 4000);
     } catch (err) {
       if (isChunkLoadError(err) && recoverFromChunkLoadError()) return;
@@ -960,25 +936,24 @@ function App() {
       return;
     }
     const paidSet = new Set(paidEmployees[periodKey] ?? []);
-    const plannedRaw = plannedTotals[periodKey];
     const epochTag = `epoch ${selected.epoch}`;
-    const carryTag = `from period ${selected.epoch - 1}`;
     const transactions = txHistory
-      .filter((r) => r.label.includes(epochTag) || r.label.includes(carryTag))
+      .filter((r) => r.label.includes(epochTag))
       .map((r) => ({ action: r.action, label: r.label, hash: r.hash, time: r.time }));
     const report = {
       format: 'salazy-period-report' as const,
-      version: 1,
+      version: 2,
       company: selected.name,
       period: selected.epoch,
       generatedAt: new Date().toISOString(),
       headcount: activeEmployees.length,
       employeesPaidThisPeriod: paidSet.size,
-      plannedTotal: plannedRaw !== undefined ? formatAmount(BigInt(plannedRaw)) : null,
+      declaredPayroll:
+        currentPayroll.committed > 0n ? formatAmount(currentPayroll.committed) : null,
       fundedOnChain: formatAmount(currentPayroll.funded),
       issuedOnChain: formatAmount(currentPayroll.issued),
-      provedFullyPaid: isProved,
-      note: 'Individual salaries are private notes; only these period totals and transaction hashes are verifiable on-chain.',
+      provedOnChain: isProved,
+      note: 'Individual salaries stay private. The declared payroll and the proved-fully-paid seal are enforced by the contract itself; anyone can verify the seal on-chain.',
       transactions,
     };
     const blob = new Blob([JSON.stringify(report, null, 2)], {
@@ -1003,7 +978,6 @@ function App() {
     activeEmployees,
     paidEmployees,
     periodKey,
-    plannedTotals,
     isProved,
     txHistory,
   ]);
@@ -1027,124 +1001,49 @@ function App() {
     addLog(`Started period ${selected.epoch + 1}`);
   }, [businesses, selected, saveBusiness, isProved]);
 
-  /** Explicitly moves the previous period's unspent funding into this one. */
-  const handleCarryOver = useCallback(async () => {
-    if (!employer || !selected || prevEpochLeftover === 0n) return;
-    setBusy('carry');
-    setError('');
-    try {
-      const company = fieldFromString(selected.companyId);
-      addLog(
-        `Moving ${formatAmount(prevEpochLeftover)} from period ${selected.epoch - 1}…`,
-      );
-      const txHash = await fund(
-        employer.contract,
-        employer.address,
-        company,
-        BigInt(selected.epoch),
-        prevEpochLeftover,
-      );
-      recordTx('fund', `Carry over from period ${selected.epoch - 1}`, txHash);
-      recordRollover(periodKey, prevEpochLeftover);
-      addLog(`Moved ${formatAmount(prevEpochLeftover)} · tx ${shortAddress(txHash, 8)}`);
-      showToast(`${formatAmount(prevEpochLeftover)} moved into period ${selected.epoch}`);
-      setTimeout(() => refreshPayroll(selected), 4000);
-    } catch (err) {
-      if (isChunkLoadError(err) && recoverFromChunkLoadError()) return;
-      const msg = err instanceof Error ? err.message : String(err);
-      setError(`Carry over failed: ${msg}`);
-      addLog(`Carry over error: ${msg}`, true);
-    } finally {
-      setBusy('');
-    }
-  }, [employer, selected, prevEpochLeftover, refreshPayroll, periodKey]);
-
   const handleProve = useCallback(async () => {
     if (!employer || !selected) return;
     setBusy('prove');
     setError('');
     try {
       const company = fieldFromString(selected.companyId);
-      const [issuedNow, fundedNow] = await Promise.all([
-        viewIssued(employer.contract, employer.address, company, BigInt(selected.epoch)).catch(() => 0n),
-        viewFunding(employer.contract, employer.address, company, BigInt(selected.epoch)).catch(() => 0n),
-      ]);
-      addLog(
-        `On-chain epoch ${selected.epoch}: issued ${formatAmount(issuedNow)} · funded ${formatAmount(fundedNow)}`,
-      );
-      if (issuedNow === 0n) {
+      // Friendly pre-check only; the CONTRACT enforces the real conditions.
+      if (currentPayroll && currentPayroll.issued === 0n) {
         setError('Nothing has been issued for this period yet — pay everyone first');
         addLog('Not paid: nothing issued for this period', true);
         return;
       }
-      // Prove against what was actually planned and sent, not against the
-      // on-chain issued amount (which would make issued == total trivial).
-      // EXCEPTION: when on-chain issued EXCEEDS the local plan, this browser's
-      // ledger is behind reality — a pay tx landed but its confirmation was
-      // never recorded (lost after reload / retried send). Reconcile UP to the
-      // chain and prove against it; hard-failing here would brick the period.
-      const plannedRaw = plannedTotals[periodKey];
-      let planned = plannedRaw !== undefined ? BigInt(plannedRaw) : null;
-      if (planned !== null && issuedNow > planned) {
-        const recordedPlan = planned;
-        setPlannedTotals((p) => {
-          const next = { ...p, [periodKey]: issuedNow.toString() };
-          persistJson(PLANNED_KEY, next);
-          return next;
-        });
-        addLog(
-          `On-chain issued ${formatAmount(issuedNow)} exceeds the recorded plan ${formatAmount(recordedPlan)} — a pay tx landed without being recorded. Reconciled plan to ${formatAmount(issuedNow)}.`,
-          true,
-        );
-        planned = issuedNow;
-      }
-      const target = planned ?? issuedNow;
-      if (planned !== null && issuedNow < target) {
-        setError(
-          `Issued ${formatAmount(issuedNow)} of ${formatAmount(target)} planned — pay the remaining employees first`,
-        );
-        addLog(
-          `Not paid: issued ${formatAmount(issuedNow)} < planned ${formatAmount(target)}`,
-          true,
-        );
-        return;
-      }
-      if (fundedNow < target) {
-        const shortfall = target - fundedNow;
-        setError(
-          `This period is under-funded: ${formatAmount(fundedNow)} funded but ${formatAmount(target)} planned. Fund ${formatAmount(shortfall)} more first`,
-        );
-        addLog(
-          `Not paid: funded ${formatAmount(fundedNow)} < planned ${formatAmount(target)} — fund ${formatAmount(shortfall)} more`,
-          true,
-        );
-        return;
-      }
-      addLog(`Building ZK proof issued == planned (${formatAmount(target)})…`);
-      const txHash = await proveFullyPaid(employer.contract, employer.address, company, BigInt(selected.epoch), target);
-      addLog(`✓ PROVED fully paid for epoch ${selected.epoch} · tx ${shortAddress(txHash, 8)} — zero amounts revealed`);
+      addLog(
+        `Proving epoch ${selected.epoch}: issued == declared payroll (${formatAmount(currentPayroll?.committed ?? 0n)})…`,
+      );
+      // v2: NO witnesses. The proof reads the period's declared budget from
+      // the employer's own notes, so it works from a freshly restored browser.
+      const txHash = await proveFullyPaid(
+        employer.contract,
+        employer.address,
+        company,
+        BigInt(selected.epoch),
+      );
+      addLog(`✓ PROVED fully paid for epoch ${selected.epoch} · tx ${shortAddress(txHash, 8)} — sealed publicly on-chain`);
       recordTx('prove', `Prove fully paid · epoch ${selected.epoch}`, txHash);
       showToast('Proved fully paid ✓');
-      setProvedEpochs((p) => {
-        const next = { ...p, [periodKey]: true };
-        try { localStorage.setItem(PROVED_KEY, JSON.stringify(next)); } catch {}
-        return next;
-      });
       setTimeout(() => refreshPayroll(selected), 4000);
     } catch (err) {
       if (isChunkLoadError(err) && recoverFromChunkLoadError()) return;
-      const msg = err instanceof Error ? err.message : String(err);
+      let msg = err instanceof Error ? err.message : String(err);
+      if (/issued != declared payroll/i.test(msg)) {
+        msg = 'Issued amount does not equal the declared payroll yet — pay every employee first';
+      } else if (/funding commit mismatch/i.test(msg)) {
+        msg = 'This period was never declared with a budget — fund it first';
+      } else if (/undeclared period/i.test(msg)) {
+        msg = 'This period has no declared budget — fund it first';
+      }
       setError(msg);
-      addLog(`Not paid: ${msg}`, true);
-      setProvedEpochs((p) => {
-        const next = { ...p, [periodKey]: false };
-        try { localStorage.setItem(PROVED_KEY, JSON.stringify(next)); } catch {}
-        return next;
-      });
+      addLog(`Not proved: ${msg}`, true);
     } finally {
       setBusy('');
     }
-  }, [employer, selected, refreshPayroll, periodKey, plannedTotals]);
+  }, [employer, selected, refreshPayroll, currentPayroll]);
 
   const copyText = useCallback(async (text: string, label: string) => {
     try {
@@ -1424,9 +1323,6 @@ function App() {
                           </span>
                         </div>
                       </div>
-                      {breakdownParts.length > 0 && (
-                        <p className="fund-break">Pool: {breakdownParts.join(' · ')}</p>
-                      )}
                     </div>
 
                     <div className="card">
@@ -1597,25 +1493,6 @@ function App() {
                           </button>
                         </div>
                       </div>
-                      {showCarryOver && (
-                        <div className="pay-note carry">
-                          <span className="pay-note-dot" />
-                          <span>
-                            Period {selected.epoch - 1} ended with{' '}
-                            {formatAmount(prevEpochLeftover)} unspent
-                          </span>
-                          <button
-                            className="btn small"
-                            disabled={busy !== ''}
-                            onClick={handleCarryOver}
-                            title="Move it into this period as funding"
-                          >
-                            {busy === 'carry'
-                              ? 'Moving…'
-                              : `Move ${formatAmount(prevEpochLeftover)} here`}
-                          </button>
-                        </div>
-                      )}
                       <div className="payroll-actions">
                         <button
                           className="btn primary"
@@ -1718,23 +1595,15 @@ function App() {
                   ) : (
                     <div className="epoch-list">
                       {epochHistory.map((rec) => {
-                        // Proved status comes from the local record and wins
-                        // over everything; a merged-away period (chain reads
-                        // 0 but we know it was paid) still shows as paid.
-                        const archived =
-                          rec.funded === 0n &&
-                          rec.issued === 0n &&
-                          rec.localIssued !== undefined &&
-                          rec.localIssued > 0n;
+                        // v2: every figure here comes straight from the
+                        // contract - per-period ledgers stay scoped on-chain.
                         const status = rec.proved
                           ? 'proved'
-                          : rec.issued === 0n && rec.funded === 0n
-                            ? archived
-                              ? 'paid'
-                              : 'not-started'
-                            : rec.issued > 0n
-                              ? 'paid'
-                              : 'funded';
+                          : rec.issued > 0n
+                            ? 'paid'
+                            : rec.funded > 0n
+                              ? 'funded'
+                              : 'not-started';
                         const label =
                           status === 'proved'
                             ? 'Proved ✓'
@@ -1753,17 +1622,9 @@ function App() {
                                 Period #{rec.epoch}
                                 {rec.epoch === selected?.epoch ? ' · current' : ''}
                               </span>
-                              <span
-                                className="epoch-meta"
-                                title={
-                                  archived
-                                    ? 'This period is closed; the private ledger keeps only the newest period, so this row shows your local payment record.'
-                                    : undefined
-                                }
-                              >
-                                {archived
-                                  ? `paid ${formatAmount(rec.localIssued!)} · local record`
-                                  : `issued ${formatAmount(rec.issued)} · funded ${formatAmount(rec.funded)}`}
+                              <span className="epoch-meta">
+                                issued {formatAmount(rec.issued)} · funded {formatAmount(rec.funded)}
+                                {rec.proved ? ' · proved on-chain' : ''}
                               </span>
                             </span>
                             <span className={`epoch-status ${status}`}>{label}</span>
