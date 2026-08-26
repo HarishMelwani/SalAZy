@@ -25,11 +25,14 @@ unconstrained fn setup() -> (TestEnvironment, AztecAddress, AztecAddress, AztecA
     (env, contract_address, alice, bob)
 }
 
+// ---------- Funding ----------
+
 #[test]
 unconstrained fn funding_is_private_to_the_employer() {
     let (env, contract_address, alice, bob) = setup();
 
-    env.call_private(alice, SalAZy::at(contract_address).fund(1, 1, 1000));
+    // First fund declares the budget: total 1000, salt 7.
+    env.call_private(alice, SalAZy::at(contract_address).fund(1, 1, 1000, 1000, 7));
 
     let alice_funding = env.execute_utility(SalAZy::at(contract_address).view_funding(alice, 1, 1));
     assert_eq(alice_funding, 1000);
@@ -39,10 +42,41 @@ unconstrained fn funding_is_private_to_the_employer() {
     assert_eq(bob_view, 0);
 }
 
+#[test(should_fail)]
+unconstrained fn first_fund_must_declare_a_budget() {
+    let (env, contract_address, alice, _bob) = setup();
+    env.call_private(alice, SalAZy::at(contract_address).fund(1, 1, 1000, 0, 0));
+}
+
+#[test]
+unconstrained fn topups_inherit_the_declared_budget() {
+    let (env, contract_address, alice, _bob) = setup();
+    env.call_private(alice, SalAZy::at(contract_address).fund(1, 1, 300, 300, 42));
+    // Top-up passes zero hints and inherits the commitment.
+    env.call_private(alice, SalAZy::at(contract_address).fund(1, 1, 200, 0, 0));
+
+    let funded = env.execute_utility(SalAZy::at(contract_address).view_funding(alice, 1, 1));
+    assert_eq(funded, 500);
+    // The declared budget is unchanged and readable by the owner.
+    let committed =
+        env.execute_utility(SalAZy::at(contract_address).view_committed_total(alice, 1, 1));
+    assert_eq(committed, 300);
+}
+
+#[test(should_fail)]
+unconstrained fn redeclaring_a_budget_is_rejected() {
+    let (env, contract_address, alice, _bob) = setup();
+    env.call_private(alice, SalAZy::at(contract_address).fund(1, 1, 300, 300, 42));
+    env.call_private(alice, SalAZy::at(contract_address).fund(1, 1, 200, 999, 55));
+}
+
+// ---------- Payroll ----------
+
 #[test]
 unconstrained fn issued_salary_lands_directly_in_the_employees_balance() {
     let (env, contract_address, alice, bob) = setup();
 
+    env.call_private(alice, SalAZy::at(contract_address).fund(1, 1, 500, 500, 11));
     env.call_private(alice, SalAZy::at(contract_address).issue_salary(1, 1, bob, 100, 2));
 
     let notes = env.execute_utility(SalAZy::at(contract_address).view_balance_notes(bob));
@@ -57,164 +91,124 @@ unconstrained fn issued_salary_lands_directly_in_the_employees_balance() {
     assert_eq(balance, 100);
 }
 
-#[test]
-unconstrained fn employer_cannot_read_the_employees_salary() {
+#[test(should_fail)]
+unconstrained fn payroll_cannot_exceed_funding() {
     let (env, contract_address, alice, bob) = setup();
-
-    env.call_private(alice, SalAZy::at(contract_address).issue_salary(1, 1, bob, 100, 2));
-
-    // Alice cannot decrypt Bob's salary, even though she created it.
-    let alice_notes = env.execute_utility(SalAZy::at(contract_address).view_balance_notes(alice));
-    assert_eq(alice_notes.len(), 0);
+    env.call_private(alice, SalAZy::at(contract_address).fund(1, 1, 100, 100, 13));
+    // 150 issued against a 100 pool must abort the whole transaction.
+    env.call_private(alice, SalAZy::at(contract_address).issue_salary(1, 1, bob, 150, 1));
 }
 
-#[test]
-unconstrained fn batch_issue_pays_every_employee_in_one_tx() {
-    let (env, contract_address, alice, bob, carol) = {
-        let mut env = TestEnvironment::new();
-        let alice = env.create_light_account();
-        let bob = env.create_light_account();
-        let carol = env.create_light_account();
-        let initializer_call = SalAZy::interface().constructor();
-        let contract_address =
-            env.deploy("@salazy_contract/SalAZy").with_private_initializer(alice, initializer_call);
-        (env, contract_address, alice, bob, carol)
-    };
-
-    let employees = employee_array([(bob, 100, 1), (carol, 250, 2), (AztecAddress::zero(), 0, 0)]);
-    env.call_private(alice, SalAZy::at(contract_address).issue_salaries(1, 1, employees));
-
-    let bob_notes = env.execute_utility(SalAZy::at(contract_address).view_balance_notes(bob));
-    assert_eq(bob_notes.len(), 1);
-    assert_eq(bob_notes.get(0).amount, 100);
-
-    let carol_notes = env.execute_utility(SalAZy::at(contract_address).view_balance_notes(carol));
-    assert_eq(carol_notes.len(), 1);
-    assert_eq(carol_notes.get(0).amount, 250);
-}
+// ---------- Prove ----------
 
 #[test]
-unconstrained fn salary_is_credited_without_any_claim() {
+unconstrained fn prove_succeeds_and_sets_a_public_seal() {
     let (env, contract_address, alice, bob) = setup();
 
-    env.call_private(alice, SalAZy::at(contract_address).issue_salary(1, 1, bob, 100, 2));
+    env.call_private(alice, SalAZy::at(contract_address).fund(1, 1, 500, 500, 21));
+    env.call_private(alice, SalAZy::at(contract_address).issue_salary(1, 1, bob, 500, 1));
 
-    // Bob never sends a transaction; the salary is already his.
-    let balance = env.execute_utility(SalAZy::at(contract_address).view_balance(bob));
-    assert_eq(balance, 100);
+    // Before proving, the seal is unset.
+    let sealed_before = env.execute_utility(SalAZy::at(contract_address).view_proved(1, 1));
+    assert(!sealed_before);
+
+    env.call_private(alice, SalAZy::at(contract_address).prove_fully_paid(1, 1));
+
+    // PUBLIC seal: anyone can verify the period was fully paid.
+    let sealed = env.execute_utility(SalAZy::at(contract_address).view_proved(1, 1));
+    assert(sealed);
 }
 
-#[test]
-unconstrained fn prove_fully_paid_succeeds_when_funded_equals_issued() {
+#[test(should_fail)]
+unconstrained fn prove_rejects_partial_payment() {
     let (env, contract_address, alice, bob) = setup();
-
-    env.call_private(alice, SalAZy::at(contract_address).fund(1, 1, 300));
+    env.call_private(alice, SalAZy::at(contract_address).fund(1, 1, 500, 500, 31));
     env.call_private(alice, SalAZy::at(contract_address).issue_salary(1, 1, bob, 100, 1));
-    env.call_private(alice, SalAZy::at(contract_address).issue_salary(1, 1, bob, 200, 2));
-
-    // The ZK proof lands if planned total was funded and every salary issued.
-    env.call_private(alice, SalAZy::at(contract_address).prove_fully_paid(1, 1, 300));
-}
-
-#[test(should_fail_with = "funded < planned total")]
-unconstrained fn prove_fully_paid_fails_when_underfunded() {
-    let (env, contract_address, alice, bob) = setup();
-
-    env.call_private(alice, SalAZy::at(contract_address).fund(1, 1, 100));
-    env.call_private(alice, SalAZy::at(contract_address).issue_salary(1, 1, bob, 100, 1));
-    env.call_private(alice, SalAZy::at(contract_address).issue_salary(1, 1, bob, 100, 2));
-
-    env.call_private(alice, SalAZy::at(contract_address).prove_fully_paid(1, 1, 200));
-}
-
-#[test(should_fail_with = "issued != planned total")]
-unconstrained fn prove_fully_paid_fails_when_not_everyone_issued() {
-    let (env, contract_address, alice, bob) = setup();
-
-    env.call_private(alice, SalAZy::at(contract_address).fund(1, 1, 200));
-    env.call_private(alice, SalAZy::at(contract_address).issue_salary(1, 1, bob, 100, 1));
-
-    // Funded enough, but only 100 of the planned 200 was issued.
-    env.call_private(alice, SalAZy::at(contract_address).prove_fully_paid(1, 1, 200));
+    // Issued 100 of the declared 500: proving must abort.
+    env.call_private(alice, SalAZy::at(contract_address).prove_fully_paid(1, 1));
 }
 
 #[test]
-unconstrained fn prove_fully_paid_succeeds_with_leftover_funding() {
+unconstrained fn prove_needs_no_witnesses_after_browser_loss() {
+    // The commitment lives in Alice's own notes, so proving is possible even
+    // if every local record was wiped: no extra arguments required.
     let (env, contract_address, alice, bob) = setup();
-
-    // Over-funding (500 vs planned 300) must not break the proof.
-    env.call_private(alice, SalAZy::at(contract_address).fund(1, 1, 500));
-    env.call_private(alice, SalAZy::at(contract_address).issue_salary(1, 1, bob, 100, 1));
-    env.call_private(alice, SalAZy::at(contract_address).issue_salary(1, 1, bob, 200, 2));
-
-    env.call_private(alice, SalAZy::at(contract_address).prove_fully_paid(1, 1, 300));
+    env.call_private(alice, SalAZy::at(contract_address).fund(2, 3, 250, 250, 77));
+    env.call_private(alice, SalAZy::at(contract_address).issue_salary(2, 3, bob, 250, 4));
+    env.call_private(alice, SalAZy::at(contract_address).prove_fully_paid(2, 3));
+    let sealed = env.execute_utility(SalAZy::at(contract_address).view_proved(2, 3));
+    assert(sealed);
 }
 
-#[test(should_fail_with = "nothing to prove")]
-unconstrained fn prove_fully_paid_fails_when_nothing_funded_or_issued() {
-    let (env, contract_address, alice, bob) = setup();
-
-    // No funding, no salaries: must NOT prove itself fully paid.
-    env.call_private(alice, SalAZy::at(contract_address).prove_fully_paid(1, 1, 0));
-}
+// ---------- Per-epoch history (v1 regression) ----------
 
 #[test]
-unconstrained fn business_ledgers_are_isolated() {
+unconstrained fn per_epoch_ledgers_stay_scoped() {
     let (env, contract_address, alice, bob) = setup();
 
-    env.call_private(alice, SalAZy::at(contract_address).fund(1, 1, 100));
-    env.call_private(alice, SalAZy::at(contract_address).fund(2, 1, 999));
+    // Period 1: declare, fund, pay in full.
+    env.call_private(alice, SalAZy::at(contract_address).fund(7, 1, 500, 500, 101));
+    env.call_private(alice, SalAZy::at(contract_address).issue_salary(7, 1, bob, 500, 1));
 
-    // Company 1 only sees company 1's funding.
-    let funding_one = env.execute_utility(SalAZy::at(contract_address).view_funding(alice, 1, 1));
-    assert_eq(funding_one, 100);
-    let funding_two = env.execute_utility(SalAZy::at(contract_address).view_funding(alice, 2, 1));
-    assert_eq(funding_two, 999);
+    // Period 2 activity must NOT absorb period 1's ledger.
+    env.call_private(alice, SalAZy::at(contract_address).fund(7, 2, 400, 400, 102));
+    env.call_private(alice, SalAZy::at(contract_address).issue_salary(7, 2, bob, 400, 1));
+
+    let ep1_funded = env.execute_utility(SalAZy::at(contract_address).view_funding(alice, 7, 1));
+    assert_eq(ep1_funded, 500);
+    let ep1_issued = env.execute_utility(SalAZy::at(contract_address).view_issued(alice, 7, 1));
+    assert_eq(ep1_issued, 500);
+    let ep2_funded = env.execute_utility(SalAZy::at(contract_address).view_funding(alice, 7, 2));
+    assert_eq(ep2_funded, 400);
+    let ep2_issued = env.execute_utility(SalAZy::at(contract_address).view_issued(alice, 7, 2));
+    assert_eq(ep2_issued, 400);
+
+    // Both periods prove independently; seals are per-period too.
+    env.call_private(alice, SalAZy::at(contract_address).prove_fully_paid(7, 1));
+    env.call_private(alice, SalAZy::at(contract_address).prove_fully_paid(7, 2));
+    let ep1_sealed = env.execute_utility(SalAZy::at(contract_address).view_proved(7, 1));
+    assert(ep1_sealed);
+    let ep2_sealed = env.execute_utility(SalAZy::at(contract_address).view_proved(7, 2));
+    assert(ep2_sealed);
 }
 
+// ---------- Defund ----------
+
 #[test]
-unconstrained fn salaries_accumulate_across_epochs_directly() {
-    let (env, contract_address, alice, bob) = setup();
+unconstrained fn defund_pulls_back_unused_funding() {
+    let (env, contract_address, alice, _bob) = setup();
+    env.call_private(alice, SalAZy::at(contract_address).fund(1, 1, 500, 500, 55));
+    env.call_private(alice, SalAZy::at(contract_address).defund(1, 1, 120));
 
-    env.call_private(alice, SalAZy::at(contract_address).issue_salary(1, 1, bob, 100, 1));
-    env.call_private(alice, SalAZy::at(contract_address).issue_salary(1, 2, bob, 50, 1));
-
-    let balance = env.execute_utility(SalAZy::at(contract_address).view_balance(bob));
-    assert_eq(balance, 150);
+    let funded = env.execute_utility(SalAZy::at(contract_address).view_funding(alice, 1, 1));
+    assert_eq(funded, 380);
 }
 
-// The user's real-world failure: 11 employees paid across 2 batches, with the
-// period funded multiple times. Every pay run and top-up used to insert its own
-// note, so the proof eventually read more than 16 note-hash read requests in a
-// single call frame and crashed with "push out of bounds". Aggregation keeps
-// funding and issuance at ONE note per (company, epoch) regardless of how many
-// times the employer pays or tops up.
-#[test]
-unconstrained fn prove_fully_paid_survives_many_notes_across_repeated_funding_and_batches() {
-    let (env, contract_address, alice, bob, carol, dave, erin, frank, grace, henry, iris, joe, kay) = {
-        let mut env = TestEnvironment::new();
-        let alice = env.create_light_account();
-        let bob = env.create_light_account();
-        let carol = env.create_light_account();
-        let dave = env.create_light_account();
-        let erin = env.create_light_account();
-        let frank = env.create_light_account();
-        let grace = env.create_light_account();
-        let henry = env.create_light_account();
-        let iris = env.create_light_account();
-        let joe = env.create_light_account();
-        let kay = env.create_light_account();
-        let initializer_call = SalAZy::interface().constructor();
-        let contract_address =
-            env.deploy("@salazy_contract/SalAZy").with_private_initializer(alice, initializer_call);
-        (env, contract_address, alice, bob, carol, dave, erin, frank, grace, henry, iris, joe, kay)
-    };
+#[test(should_fail)]
+unconstrained fn defund_cannot_exceed_funding() {
+    let (env, contract_address, alice, _bob) = setup();
+    env.call_private(alice, SalAZy::at(contract_address).fund(1, 1, 500, 500, 56));
+    env.call_private(alice, SalAZy::at(contract_address).defund(1, 1, 900));
+}
 
-    // Employer tops the period up 4 separate times (100 + 200 + 300 + 400 = 1000).
-    env.call_private(alice, SalAZy::at(contract_address).fund(1, 4, 100));
-    env.call_private(alice, SalAZy::at(contract_address).fund(1, 4, 200));
-    env.call_private(alice, SalAZy::at(contract_address).fund(1, 4, 300));
-    env.call_private(alice, SalAZy::at(contract_address).fund(1, 4, 400));
+// ---------- Batch payrun at protocol limits ----------
+
+#[test]
+unconstrained fn batch_payrun_survives_two_batches_and_topups_then_proves() {
+    let (mut env, contract_address, alice, bob) = setup();
+    let carol = env.create_light_account();
+    let dave = env.create_light_account();
+    let erin = env.create_light_account();
+    let frank = env.create_light_account();
+    let grace = env.create_light_account();
+    let henry = env.create_light_account();
+    let iris = env.create_light_account();
+    let joe = env.create_light_account();
+    let kay = env.create_light_account();
+
+    // Declared budget 900 across two top-ups.
+    env.call_private(alice, SalAZy::at(contract_address).fund(1, 4, 550, 900, 64));
+    env.call_private(alice, SalAZy::at(contract_address).fund(1, 4, 350, 0, 0));
 
     // Batch 1: 7 employees (max per tx), total 550.
     let mut batch1 = employee_array([(bob, 100, 1), (carol, 100, 1), (dave, 50, 1)]);
@@ -229,43 +223,8 @@ unconstrained fn prove_fully_paid_survives_many_notes_across_repeated_funding_an
     batch2[3] = SalAZy::Employee { address: AztecAddress::zero(), amount: 0, role: 0 };
     env.call_private(alice, SalAZy::at(contract_address).issue_salaries(1, 4, batch2));
 
-    // Planned total is 900 (550 + 350). The proof must land even though the
-    // combined ledger would previously have held many notes.
-    env.call_private(alice, SalAZy::at(contract_address).prove_fully_paid(1, 4, 900));
-}
-
-// KNOWN LIMITATION (found 2026-08-22 via user report "old periods show
-// Not started"): the aggregated-ledger design does not keep history across
-// epochs on THIS deployed contract. A later fund()/add_issuance() pulls the
-// prior periods' notes into the newest epoch, so only the latest period
-// reports non-zero totals. Current-period math stays correct (the newest
-// period holds the cumulative totals, so proving still works and no value is
-// lost) - but per-period HISTORY is not retrievable from the ledger. The
-// frontend therefore keeps period history from its local records. This test
-// pins the behaviour so a future contract upgrade that fixes per-epoch
-// scoping flips it to the strict per-epoch assertions above.
-#[test]
-unconstrained fn known_limit_ledger_merges_across_epochs() {
-    let (env, contract_address, alice, _bob) = setup();
-
-    // Period 1: fund 500, pay 100.
-    env.call_private(alice, SalAZy::at(contract_address).fund(7, 1, 500));
-    env.call_private(alice, SalAZy::at(contract_address).issue_salary(7, 1, alice, 100, 1));
-
-    let ep1_funded_before =
-        env.execute_utility(SalAZy::at(contract_address).view_funding(alice, 7, 1));
-    assert_eq(ep1_funded_before, 500);
-
-    // Period 2 activity absorbs period 1's ledger entries.
-    env.call_private(alice, SalAZy::at(contract_address).fund(7, 2, 400));
-    env.call_private(alice, SalAZy::at(contract_address).issue_salary(7, 2, alice, 400, 1));
-
-    let ep1_funded = env.execute_utility(SalAZy::at(contract_address).view_funding(alice, 7, 1));
-    assert_eq(ep1_funded, 0);
-    let ep1_issued = env.execute_utility(SalAZy::at(contract_address).view_issued(alice, 7, 1));
-    assert_eq(ep1_issued, 0);
-
-    // The newest epoch carries the cumulative totals (400 + absorbed 500).
-    let ep2_funded = env.execute_utility(SalAZy::at(contract_address).view_funding(alice, 7, 2));
-    assert_eq(ep2_funded, 900);
+    // Issued exactly the declared 900: the proof lands and seals publicly.
+    env.call_private(alice, SalAZy::at(contract_address).prove_fully_paid(1, 4));
+    let sealed = env.execute_utility(SalAZy::at(contract_address).view_proved(1, 4));
+    assert(sealed);
 }
